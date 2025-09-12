@@ -3,9 +3,10 @@
 	"name": "ObShare",
 	"version": "1.0.2",
 	"minAppVersion": "1.9.12",
-	"description": "Obsidian Note Synchronization and Sharing Solution Based on Feishu Docs. 基于飞书云文档的Obsidian笔记同步与分享方案",
+	"description": "Your Note Synchronization and Sharing Solution Based on Feishu Docs. 基于飞书云文档的笔记同步与分享方案",
 	"author": "xigua",
 	"authorUrl": "",
 	"fundingUrl": "",
 	"isDesktopOnly": false
+
 }
