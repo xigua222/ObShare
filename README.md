@@ -2,6 +2,8 @@
 
 > 🚀 **一次配置，轻松使用** - 基于飞书云文档的 Obsidian 笔记同步与分享方案
 
+[中文](README.md)|[English](README-EN.md)
+
 [![Version](https://img.shields.io/badge/version-1.0.2-blue.svg)](https://github.com/your-repo/ob-share)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Obsidian](https://img.shields.io/badge/Obsidian-1.9.12+-purple.svg)](https://obsidian.md/)
@@ -84,12 +86,12 @@
 <img width="564" height="510" alt="6b129536-f084-4887-86e9-4b1bbb0c5610" src="https://github.com/user-attachments/assets/9af947b6-dcf8-4d72-b908-cda0cef8fd62" />
 
 
-### 🖼️ 图片自动处理
+#### 🖼️ 图片自动处理
 - 自动上传本地图片到飞书
 - 转换图片链接为飞书格式
 - 支持多种图片格式
 
-### 📊 使用统计
+#### 📊 使用统计
 - 实时显示本月API调用次数
 - 上传文档数量统计
 - 帮助合理控制使用频率
