@@ -1357,12 +1357,17 @@ export class FeishuApiClient {
         obsidianImageRegex.lastIndex = 0;
         
         while ((match = obsidianImageRegex.exec(markdownContent)) !== null) {
-            const fileName = match[1]; // 图片文件名
-            const altText = match[2] || fileName; // alt文本，如果没有指定则使用文件名
+            const originalFileName = match[1]; // 图片文件名
+            const fileName = originalFileName.trim();
+            const originalAltText = match[2] || originalFileName;
+            const altText = originalAltText.trim() || fileName; // alt文本，如果没有指定则使用文件名
             const obsidianSyntax = match[0]; // 完整的Obsidian语法
             
+            const needsAngleBrackets = /\s/.test(fileName) || fileName.includes('(') || fileName.includes(')');
+            const markdownPath = needsAngleBrackets ? `<${fileName}>` : fileName;
+
             // 转换为标准Markdown语法: ![alt](filename)
-            const standardSyntax = `![${altText}](${fileName})`;
+            const standardSyntax = `![${altText}](${markdownPath})`;
             
             // 替换内容
             convertedContent = convertedContent.replace(obsidianSyntax, standardSyntax);
@@ -1397,7 +1402,7 @@ export class FeishuApiClient {
         const convertedContent = FeishuApiClient.convertObsidianImageSyntax(markdownContent);
         
         // 匹配标准Markdown格式的图片: ![alt](path) 或 ![alt](path "title")
-        const markdownImageRegex = /!\[([^\]]*)\]\(([^\)\s]+)(?:\s+"([^"]*)")?\)/g;
+        const markdownImageRegex = /!\[([^\]]*)\]\((<[^>]+>|[^\)]+?)(?:\s+"([^"]*)")?\)/g;
         
         let match;
         let position = 0;
@@ -1405,11 +1410,13 @@ export class FeishuApiClient {
         // 处理标准Markdown格式的图片（现在包括转换后的Obsidian图片）
         while ((match = markdownImageRegex.exec(convertedContent)) !== null) {
             const alt = match[1];
-            const path = match[2];
+            const rawPath = match[2];
             const title = match[3];
-            
+
+            const path = rawPath ? rawPath.trim().replace(/^<(.+)>$/, '$1') : '';
+
             if (!path) continue;
-            
+
             // 提取文件名
             const fileName = path.split('/').pop() || path;
             const fullPath = basePath && !path.startsWith('http') ? `${basePath}/${path}` : path;

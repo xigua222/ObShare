@@ -1095,10 +1095,14 @@ var FeishuApiClient = class {
     let convertCount = 0;
     obsidianImageRegex.lastIndex = 0;
     while ((match = obsidianImageRegex.exec(markdownContent)) !== null) {
-      const fileName = match[1];
-      const altText = match[2] || fileName;
+      const originalFileName = match[1];
+      const fileName = originalFileName.trim();
+      const originalAltText = match[2] || originalFileName;
+      const altText = originalAltText.trim() || fileName;
       const obsidianSyntax = match[0];
-      const standardSyntax = `![${altText}](${fileName})`;
+      const needsAngleBrackets = /\s/.test(fileName) || fileName.includes("(") || fileName.includes(")");
+      const markdownPath = needsAngleBrackets ? `<${fileName}>` : fileName;
+      const standardSyntax = `![${altText}](${markdownPath})`;
       convertedContent = convertedContent.replace(obsidianSyntax, standardSyntax);
       convertCount++;
       console.log("[\u98DE\u4E66API] \u8F6C\u6362\u56FE\u7247\u8BED\u6CD5:", {
@@ -1123,13 +1127,14 @@ var FeishuApiClient = class {
   static extractImageInfoFromMarkdown(markdownContent, basePath) {
     const imageInfos = [];
     const convertedContent = FeishuApiClient.convertObsidianImageSyntax(markdownContent);
-    const markdownImageRegex = /!\[([^\]]*)\]\(([^\)\s]+)(?:\s+"([^"]*)")?\)/g;
+    const markdownImageRegex = /!\[([^\]]*)\]\((<[^>]+>|[^\)]+?)(?:\s+"([^"]*)")?\)/g;
     let match;
     let position = 0;
     while ((match = markdownImageRegex.exec(convertedContent)) !== null) {
       const alt = match[1];
-      const path = match[2];
+      const rawPath = match[2];
       const title = match[3];
+      const path = rawPath ? rawPath.trim().replace(/^<(.+)>$/, "$1") : "";
       if (!path)
         continue;
       const fileName = path.split("/").pop() || path;
