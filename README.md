@@ -4,7 +4,7 @@
 
 [中文](README.md)|[English](README-EN.md)
 
-[![Version](https://img.shields.io/badge/version-1.0.2-blue.svg)](https://github.com/your-repo/ob-share)
+[![Version](https://img.shields.io/badge/version-1.2.0-blue.svg)](https://github.com/your-repo/ob-share)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Obsidian](https://img.shields.io/badge/Obsidian-1.9.12+-purple.svg)](https://obsidian.md/)
 
@@ -16,6 +16,8 @@
 - 优化图片上传体验，修复粘贴图片无法正常上传的问题
 - 新增 mermaid 语法适配，优化 mermaid 不可识别或者显示异常
 - 优化代码规范和精简性，以满足 Obsidian 官方插件审核要求
+- 新增 yaml 适配
+- 新增对 SVG 格式图片适配
 - 新增审查日志（debug 模式），上传过程全程可审计
 
 ## ✨ 核心特性
