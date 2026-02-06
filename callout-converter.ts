@@ -20,14 +20,14 @@ export interface FeishuBlock {
     index?: number;
     text?: {
         elements: Array<{
-            text_run: {
+            text_run?: {
                 content: string;
             };
         }>;
     };
     quote?: {
         elements: Array<{
-            text_run: {
+            text_run?: {
                 content: string;
             };
         }>;
@@ -45,7 +45,7 @@ export interface FeishuBlock {
             block_type: number;
             text: {
                 elements: Array<{
-                    text_run: {
+                    text_run?: {
                         content: string;
                     };
                 }>;
@@ -53,6 +53,24 @@ export interface FeishuBlock {
         }>;
     };
 }
+
+type FeishuDescendantBlock = {
+    block_id: string;
+    block_type: number;
+    callout?: {
+        background_color: number;
+        border_color: number;
+        text_color: number;
+    };
+    children: string[];
+    text?: {
+        elements: Array<{
+            text_run: {
+                content: string;
+            };
+        }>;
+    };
+};
 
 
 
@@ -67,7 +85,7 @@ export class CalloutConverter {
         this.debugEnabled = enabled;
     }
 
-    private debug(...args: any[]): void {
+    private debug(...args: unknown[]): void {
         if (CalloutConverter.debugEnabled) {
             console.debug(...args);
         }
@@ -257,12 +275,12 @@ export class CalloutConverter {
      */
     createFeishuCalloutDescendants(callout: CalloutInfo): {
         childrenIds: string[];
-        descendants: any[];
+        descendants: FeishuDescendantBlock[];
     } {
         const backgroundColorNumber = this.getBackgroundColorNumber(callout.type);
         
-        const calloutBlockId = `callout_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-        const textBlockId = `text_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        const calloutBlockId = `callout_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`;
+        const textBlockId = `text_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`;
         
         return {
             childrenIds: [calloutBlockId],
@@ -451,9 +469,9 @@ export class CalloutConverter {
      * @param blocks 原始文档块数组
      * @returns 添加索引后的块数组
      */
-    addIndexToBlocks(blocks: any[]): FeishuBlock[] {
+    addIndexToBlocks(blocks: FeishuBlock[]): FeishuBlock[] {
         const blocksWithIndex: FeishuBlock[] = [];
-        const parentChildrenMap = new Map<string, any[]>();
+        const parentChildrenMap = new Map<string, FeishuBlock[]>();
         
         // 1. 构建父子关系映射
         for (const block of blocks) {
@@ -468,13 +486,23 @@ export class CalloutConverter {
         // 2. 为每个块分配索引
         for (const block of blocks) {
             const feishuBlock: FeishuBlock = {
-                block_id: block.block_id,
-                block_type: block.block_type,
-                parent_id: block.parent_id,
-                text: block.text,
-                quote: block.quote,
-                callout: block.callout
+                block_type: block.block_type
             };
+            if (block.block_id !== undefined) {
+                feishuBlock.block_id = block.block_id;
+            }
+            if (block.parent_id !== undefined) {
+                feishuBlock.parent_id = block.parent_id;
+            }
+            if (block.text !== undefined) {
+                feishuBlock.text = block.text;
+            }
+            if (block.quote !== undefined) {
+                feishuBlock.quote = block.quote;
+            }
+            if (block.callout !== undefined) {
+                feishuBlock.callout = block.callout;
+            }
             
             // 如果有父块，计算在父块中的索引
             if (block.parent_id && parentChildrenMap.has(block.parent_id)) {

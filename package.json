@@ -1,6 +1,6 @@
 {
   "name": "feishu-uploader",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Upload Obsidian documents to Feishu",
   "main": "main.js",
   "scripts": {

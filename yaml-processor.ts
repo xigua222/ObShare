@@ -5,9 +5,11 @@
 
 import { FeishuApiClient } from './feishu-api';
 
+export type YamlValue = string | number | boolean | null | string[] | Record<string, unknown> | Array<unknown>;
+
 export interface YamlInfo {
     // 动态字段支持 - 可以包含任何YAML字段
-    [key: string]: any;
+    [key: string]: YamlValue;
     
     // 必需的元数据字段
     originalText: string;   // 原始 YAML 文本
@@ -47,6 +49,25 @@ export interface FeishuYamlBlock {
     };
 }
 
+type FeishuYamlDescendant = {
+    block_id: string;
+    block_type: number;
+    callout?: {
+        background_color: number;
+        border_color: number;
+        text_color: number;
+        emoji_id: string;
+    };
+    children?: string[];
+    text?: {
+        elements: Array<{
+            text_run: {
+                content: string;
+            };
+        }>;
+    };
+};
+
 /**
  * YAML 处理器类
  */
@@ -58,13 +79,13 @@ export class YamlProcessor {
         this.debugEnabled = enabled;
     }
 
-    private debug(...args: any[]): void {
+    private debug(...args: unknown[]): void {
         if (YamlProcessor.debugEnabled) {
             console.debug(...args);
         }
     }
 
-    private logError(summary: string, error: unknown, details?: any): void {
+    private logError(summary: string, error: unknown, details?: Record<string, unknown>): void {
         const errorMessage = error instanceof Error ? error.message : String(error);
         console.error(summary, errorMessage);
         this.debug(`${summary} 详情:`, {
@@ -185,7 +206,7 @@ export class YamlProcessor {
      * @param value 原始字符串值
      * @returns 解析后的值
      */
-    private parseYamlValue(value: string): any {
+    private parseYamlValue(value: string): YamlValue {
         // 移除引号
         const trimmedValue = value.replace(/^["']|["']$/g, '');
         
@@ -254,12 +275,12 @@ export class YamlProcessor {
      */
     createFeishuYamlDescendants(yamlInfo: YamlInfo): {
         childrenIds: string[];
-        descendants: any[];
+        descendants: FeishuYamlDescendant[];
     } {
         const content = this.formatYamlContent(yamlInfo);
         
-        const calloutBlockId = `yaml_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-        const textBlockId = `text_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        const calloutBlockId = `yaml_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`;
+        const textBlockId = `text_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`;
         
         return {
             childrenIds: [calloutBlockId],
@@ -352,7 +373,7 @@ export class YamlProcessor {
      * @param value 字段值
      * @returns 格式化后的字符串
      */
-    private formatFieldValue(key: string, value: any): string {
+    private formatFieldValue(key: string, value: YamlValue): string {
         if (value === undefined || value === null) return '';
 
         // 特殊字段的格式化
@@ -461,15 +482,14 @@ export class YamlProcessor {
             const descendants = this.createFeishuYamlDescendants(yamlInfo);
             
             // 使用嵌套块API插入YAML信息块
-            const response = await this.feishuClient.createDocumentDescendants(
+            await this.feishuClient.createDocumentDescendants(
                 documentId,
                 rootBlock.block_id,
                 insertIndex,
                 descendants.childrenIds,
                 descendants.descendants
             );
-            
-            return response && response.code === 0;
+            return true;
         } catch (error) {
             this.logError('[YAML处理器] 插入YAML块失败:', error, { documentId, insertIndex });
             return false;

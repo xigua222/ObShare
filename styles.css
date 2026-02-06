@@ -92,6 +92,7 @@
 	background: var(--interactive-accent);
 	transition: width 0.3s ease;
 	border-radius: 3px;
+	width: var(--obshare-progress-width, 0%);
 }
 
 /* 成功提示样式 */
@@ -600,10 +601,15 @@
 	margin-bottom: 20px;
 	color: var(--text-muted);
 	font-size: 14px;
+	text-align: center;
 }
 
 .obshare-progress-modal-step.obshare-progress-error {
 	color: var(--text-error);
+}
+
+.obshare-feishu-upload-progress + .obshare-progress-modal-step {
+	margin-top: 15px;
 }
 
 .obshare-progress-container {
@@ -650,9 +656,11 @@
 }
 
 .obshare-progress-hint {
-	color: var(--text-muted);
+	color: var(--text-faint);
 	font-size: 12px;
 	font-style: italic;
+	text-align: center;
+	margin-top: 10px;
 }
 
 .obshare-mermaid-temp-container {
@@ -756,6 +764,49 @@
 	padding: 12px 16px;
 	background: var(--background-secondary);
 	border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.obshare-header-container {
+	margin-bottom: 20px;
+}
+
+.obshare-title-row {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	margin-bottom: 10px;
+}
+
+.obshare-settings-title {
+	font-size: 20px;
+	font-weight: 600;
+	color: var(--text-normal);
+}
+
+.obshare-github-link {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	text-decoration: none;
+	color: var(--text-normal);
+	padding: 4px 8px;
+	border-radius: 4px;
+	border: 1px solid var(--background-modifier-border);
+	background: var(--background-primary);
+	font-size: 14px;
+}
+
+.obshare-github-link-icon {
+	display: flex;
+	align-items: center;
+}
+
+.obshare-encourage-text {
+	color: var(--text-muted);
+	font-size: 12px;
+	text-align: right;
+	margin-top: 0;
+	margin-bottom: 10px;
 }
 
 .obshare-page-group-title {

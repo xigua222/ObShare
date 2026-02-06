@@ -1,11 +1,10 @@
 import { App, Editor, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting, TFile, MarkdownRenderer, Component } from 'obsidian';
-import { FeishuApiClient, createFeishuClient } from './feishu-api';
+import { FeishuApiClient, ImageInfo, createFeishuClient } from './feishu-api';
 import { CryptoUtils } from './crypto-utils';
 import { CalloutConverter, CalloutInfo } from './callout-converter';
 import { YamlProcessor, YamlInfo } from './yaml-processor';
-import { LinkProcessor } from './link-processor';
+import { LinkProcessor, UploadResult } from './link-processor';
 import { MermaidConverter, MermaidInfo, MermaidConversionResult } from './mermaid-converter';
-import { SmartUpdateManager } from './smart-update';
 
 // 通知管理器
 class NotificationManager {
@@ -84,7 +83,6 @@ interface FeishuUploaderSettings {
 	apiCallCount: number; // 本月API调用次数
 	lastResetDate: string; // 上次重置日期（YYYY-MM格式）
 	enableDoubleLinkMode: boolean; // 是否启用双链模式
-	enableSmartUpdate: boolean; // 是否启用智能更新模式
 	debugLoggingEnabled: boolean; // 是否启用调试日志
 }
 
@@ -100,9 +98,33 @@ const DEFAULT_SETTINGS: FeishuUploaderSettings = {
 	apiCallCount: 0,
 	lastResetDate: new Date().toISOString().substring(0, 7), // 当前年月
 	enableDoubleLinkMode: true, // 默认启用双链模式
-	enableSmartUpdate: false, // 默认关闭智能更新模式
 	debugLoggingEnabled: false
 }
+
+type SensitiveField = keyof Pick<FeishuUploaderSettings, 'appId' | 'appSecret' | 'folderToken' | 'userId'>;
+
+type PermissionSettings = {
+	isPublic: boolean;
+	allowCopy: boolean;
+	allowCreateCopy: boolean;
+	allowPrintDownload: boolean;
+	copyEntity?: string;
+	securityEntity?: string;
+};
+
+type RegularImageInfo = {
+	fileName: string;
+	path: string;
+	alt?: string;
+	title?: string;
+	originalSyntax: 'obsidian' | 'markdown';
+};
+
+type CollectedImageInfo =
+	| { type: 'regular'; position: number; info: RegularImageInfo; originalMatch: string }
+	| { type: 'mermaid'; position: number; info: MermaidInfo; originalMatch: string };
+
+type LinkProcessResult = { processedContent: string; uploadResults: Map<string, UploadResult> };
 
 export default class FeishuUploaderPlugin extends Plugin {
 	settings!: FeishuUploaderSettings;
@@ -112,14 +134,11 @@ export default class FeishuUploaderPlugin extends Plugin {
 	public feishuRichClient: FeishuApiClient | null = null;
 	// 通知管理器
 	public notificationManager = new NotificationManager();
-	// 智能更新管理器
-	public smartUpdateManager: SmartUpdateManager | null = null;
 	// 上次保存的敏感数据哈希，用于检测变化
 	private lastSensitiveDataHash: string | null = null;
 
 	applyDebugLoggingSetting(): void {
 		FeishuApiClient.setDebugEnabled(this.settings.debugLoggingEnabled);
-		SmartUpdateManager.setDebugEnabled(this.settings.debugLoggingEnabled);
 		MermaidConverter.setDebugEnabled(this.settings.debugLoggingEnabled);
 		CalloutConverter.setDebugEnabled(this.settings.debugLoggingEnabled);
 		YamlProcessor.setDebugEnabled(this.settings.debugLoggingEnabled);
@@ -152,7 +171,7 @@ export default class FeishuUploaderPlugin extends Plugin {
 			id: 'publish-current-document',
 			name: '分享当前文档到飞书',
 			callback: () => {
-				this.uploadCurrentDocument();
+				void this.uploadCurrentDocument();
 			}
 		});
 
@@ -166,8 +185,8 @@ export default class FeishuUploaderPlugin extends Plugin {
 						item
 					.setTitle('分享该页面')
 					.setIcon('share')
-							.onClick(async () => {
-								await this.uploadFile(file);
+							.onClick(() => {
+								void this.uploadFile(file);
 							});
 					});
 				}
@@ -212,14 +231,9 @@ export default class FeishuUploaderPlugin extends Plugin {
 				this.feishuRichClient = createFeishuClient(this.settings.appId, this.settings.appSecret, this.app, asyncCallback);
 			}
 			
-			// 初始化智能更新管理器
-			if (this.feishuClient) {
-				this.smartUpdateManager = new SmartUpdateManager(this.feishuClient);
-			}
 		} else {
 			this.feishuClient = null;
 			this.feishuRichClient = null;
-			this.smartUpdateManager = null;
 		}
 	}
 
@@ -231,13 +245,14 @@ export default class FeishuUploaderPlugin extends Plugin {
 
 	async loadSettings() {
 		const loadedData = await this.loadData();
-		this.settings = Object.assign({}, DEFAULT_SETTINGS, loadedData);
+		const loadedSettings: Partial<FeishuUploaderSettings> = typeof loadedData === 'object' && loadedData !== null ? loadedData : {};
+		this.settings = Object.assign({}, DEFAULT_SETTINGS, loadedSettings);
 		
 		// 检查是否有明文敏感数据需要加密
-		const sensitiveFields = ['appId', 'appSecret', 'folderToken', 'userId'] as const;
+		const sensitiveFields: SensitiveField[] = ['appId', 'appSecret', 'folderToken', 'userId'];
 		let hasPlaintextData = false;
 		for (const field of sensitiveFields) {
-			const value = (loadedData as any)?.[field];
+			const value = loadedSettings[field];
 			if (value && typeof value === 'string' && !CryptoUtils.isEncryptedData(value)) {
 				hasPlaintextData = true;
 				break;
@@ -248,7 +263,7 @@ export default class FeishuUploaderPlugin extends Plugin {
 		this.settings = await CryptoUtils.decryptSensitiveSettings(this.settings);
 		
 		// 初始化敏感数据哈希
-		const sensitiveData = sensitiveFields.map(field => (this.settings as any)[field] || '').join('|');
+		const sensitiveData = sensitiveFields.map(field => this.settings[field] || '').join('|');
 		this.lastSensitiveDataHash = await this.simpleHash(sensitiveData);
 		
 		// 如果检测到明文数据，自动加密保存
@@ -286,8 +301,8 @@ export default class FeishuUploaderPlugin extends Plugin {
 	 */
 	private async saveDataOptimized(): Promise<void> {
 		// 计算当前敏感数据的哈希
-		const sensitiveFields = ['appId', 'appSecret', 'folderToken', 'userId'] as const;
-		const sensitiveData = sensitiveFields.map(field => (this.settings as any)[field] || '').join('|');
+		const sensitiveFields: SensitiveField[] = ['appId', 'appSecret', 'folderToken', 'userId'];
+		const sensitiveData = sensitiveFields.map(field => this.settings[field] || '').join('|');
 		const currentHash = await this.simpleHash(sensitiveData);
 		
 		// 如果敏感数据没有变化，直接保存原始数据
@@ -320,24 +335,13 @@ export default class FeishuUploaderPlugin extends Plugin {
 	 * @param content 文档内容
 	 * @returns 按原文档位置排序的图片信息数组
 	 */
-	private collectAllImageInfos(content: string): Array<{
-		type: 'regular' | 'mermaid';
-		position: number;
-		info: any;
-		originalMatch: string;
-	}> {
-		const allImages: Array<{
-			type: 'regular' | 'mermaid';
-			position: number;
-			info: any;
-			originalMatch: string;
-		}> = [];
+	private collectAllImageInfos(content: string): CollectedImageInfo[] {
+		const allImages: CollectedImageInfo[] = [];
 
 		// 1. 收集Mermaid图表信息
 		if (MermaidConverter.hasMermaidCharts(content)) {
 			const mermaidInfos = MermaidConverter.extractMermaidCharts(content);
 			mermaidInfos.forEach(mermaidInfo => {
-				// 找到Mermaid图表在原文中的位置
 				const mermaidPattern = new RegExp(`\`\`\`mermaid[\\s\\S]*?\`\`\``, 'g');
 				let match;
 				
@@ -364,23 +368,27 @@ export default class FeishuUploaderPlugin extends Plugin {
 		
 		while ((match = obsidianImageRegex.exec(content)) !== null) {
 			const fileName = match[1];
+			if (!fileName) {
+				continue;
+			}
+			const info: RegularImageInfo = {
+				fileName,
+				path: fileName,
+				originalSyntax: 'obsidian'
+			};
 			allImages.push({
 				type: 'regular',
 				position: match.index,
-				info: {
-					fileName: fileName,
-					path: fileName,
-					originalSyntax: 'obsidian'
-				},
+				info,
 				originalMatch: match[0]
 			});
 		}
 
 		// 标准Markdown图片语法: ![alt](path)
-		const markdownImageRegex = /!\[([^\]]*)\]\(([^\)\s]+)(?:\s+"([^"]*)")?\)/g;
+		const markdownImageRegex = /!\[([^\]]*)\]\(([^)\s]+)(?:\s+"([^"]*)")?\)/g;
 		
 		while ((match = markdownImageRegex.exec(content)) !== null) {
-			const alt = match[1];
+			const alt = match[1] ?? '';
 			const path = match[2];
 			const title = match[3];
 			
@@ -390,16 +398,17 @@ export default class FeishuUploaderPlugin extends Plugin {
 			const decodedPath = decodeURI(path);
 			const fileName = decodedPath.split('/').pop() || decodedPath;
 			
+			const info: RegularImageInfo = {
+				fileName,
+				path: decodedPath,
+				alt,
+				originalSyntax: 'markdown',
+				...(title !== undefined ? { title } : {})
+			};
 			allImages.push({
 				type: 'regular',
 				position: match.index,
-				info: {
-					fileName: fileName,
-					path: decodedPath,
-					alt: alt,
-					title: title,
-					originalSyntax: 'markdown'
-				},
+				info,
 				originalMatch: match[0]
 			});
 		}
@@ -460,12 +469,8 @@ export default class FeishuUploaderPlugin extends Plugin {
 		let content = await this.app.vault.read(file);
 		const title = file.basename;
 
-		// 检查是否为智能更新，以便显示正确的标题
-		const willUseSmartUpdate = !!(this.smartUpdateManager && 
-			this.smartUpdateManager.shouldUseSmartUpdate(title, this.settings.uploadHistory, this.settings.enableSmartUpdate));
-
 		// 创建并显示进度条弹窗
-		const progressModal = new UploadProgressModal(this.app, willUseSmartUpdate);
+		const progressModal = new UploadProgressModal(this.app);
 		progressModal.open();
 
 		try {
@@ -477,7 +482,7 @@ export default class FeishuUploaderPlugin extends Plugin {
 			
 			// 处理双链引用（在YAML处理之后，其他处理之前）(15-35%)
 			let linkProcessor: LinkProcessor | null = null;
-			let linkResult: any = null;
+			let linkResult: LinkProcessResult | null = null;
 			if (this.settings.enableDoubleLinkMode && this.feishuClient) {
 				linkProcessor = new LinkProcessor(this.app, this.feishuClient, this);
 				linkResult = await linkProcessor.processWikiLinks(content, (status) => {
@@ -544,7 +549,7 @@ export default class FeishuUploaderPlugin extends Plugin {
 						if (imageInfo.type === 'mermaid') {
 							progressModal.updateProgress(progress, `正在渲染Mermaid图表 ${i + 1}/${allImageInfos.length}...`);
 							
-							const mermaidInfo = imageInfo.info as MermaidInfo;
+							const mermaidInfo = imageInfo.info;
 							
 							// 获取推荐的转换选项
 							const options = MermaidConverter.getRecommendedOptions(mermaidInfo.content);
@@ -565,8 +570,8 @@ export default class FeishuUploaderPlugin extends Plugin {
 							FeishuApiClient.addMermaidImageToCache(mermaidInfo.fileName, conversionResult.pngBase64, svgConvertOptions);
 							
 							// 将Mermaid信息存储起来，在图片处理阶段使用
-							(mermaidInfo as any).pngBase64 = conversionResult.pngBase64;
-							(mermaidInfo as any).tempFileName = tempFileName;
+							mermaidInfo.pngBase64 = conversionResult.pngBase64;
+							mermaidInfo.tempFileName = tempFileName;
 							
 							cachedMermaidInfos.push(mermaidInfo);
 							
@@ -600,13 +605,13 @@ export default class FeishuUploaderPlugin extends Plugin {
 			}
 			
 			// 步骤3: 构建正确顺序的图片信息数组
-			let orderedImageInfos: any[] = [];
+			let orderedImageInfos: ImageInfo[] = [];
 			if (hasImages) {
 				// 按照allImageInfos的顺序构建ImageInfo数组
 				for (const imageInfo of allImageInfos) {
 					if (imageInfo.type === 'mermaid') {
 						// Mermaid图片使用生成的文件名
-						const mermaidInfo = imageInfo.info as MermaidInfo;
+						const mermaidInfo = imageInfo.info;
 						orderedImageInfos.push({
 							path: mermaidInfo.fileName,
 							fileName: mermaidInfo.fileName,
@@ -623,63 +628,9 @@ export default class FeishuUploaderPlugin extends Plugin {
 				}
 			}
 
-			// 步骤4: 检查智能更新 (55-60%)
-		let result: { token: string; url: string };
-		let isSmartUpdate = false; // 标识是否为智能更新
-		
-		// 检查是否应该使用智能更新
-		if (this.smartUpdateManager && this.smartUpdateManager.shouldUseSmartUpdate(title, this.settings.uploadHistory, this.settings.enableSmartUpdate, content)) {
-			// 更新弹窗标题为增量更新模式
-			progressModal.updateTitle(true);
-			progressModal.updateProgress(55, '检测到已存在文档，正在执行增量更新...');
-			
-			try {
-				const smartUpdateResult = await this.smartUpdateManager.performSmartUpdate(
-					title,
-					content,
-					this.settings.uploadHistory,
-					(status: string) => {
-						progressModal.updateProgress(57, status);
-					},
-					orderedImageInfos,
-					undefined
-				);
-				
-				if (smartUpdateResult.success) {
-					result = {
-						token: smartUpdateResult.documentId,
-						url: smartUpdateResult.url
-					};
-					isSmartUpdate = true; // 标记为智能更新成功
-					
-					progressModal.updateProgress(60, '文档更新成功！');
-				} else {
-					// 智能更新失败，回退到正常上传流程
-					console.warn('[智能更新] 更新失败，回退到正常上传:', smartUpdateResult.error);
-					progressModal.updateTitle(false); // 更新标题为正常上传模式
-					progressModal.updateProgress(60, '更新失败，正在创建新文档...');
-					
-					// 继续执行正常上传流程
-					result = await this.performNormalUpload(file, content, hasImages, orderedImageInfos, progressModal);
-				}
-			} catch (error) {
-				// 智能更新出错，回退到正常上传流程
-				const errorMessage = error instanceof Error ? error.message : String(error);
-				console.error(`[智能更新] 更新出错，回退到正常上传: ${errorMessage}`);
-				if (this.settings.debugLoggingEnabled) {
-					console.debug('[智能更新] 更新出错详情:', error);
-				}
-				progressModal.updateTitle(false); // 更新标题为正常上传模式
-				progressModal.updateProgress(60, '更新出错，正在创建新文档...');
-				
-				// 继续执行正常上传流程
-				result = await this.performNormalUpload(file, content, hasImages, orderedImageInfos, progressModal);
-			}
-		} else {
-			// 正常上传流程 (55-85%)
+			// 步骤4: 正常上传流程 (55-85%)
 			progressModal.updateProgress(55, '正在上传文档到飞书...');
-			result = await this.performNormalUpload(file, content, hasImages, orderedImageInfos, progressModal);
-		}
+			const result = await this.performNormalUpload(file, content, hasImages, orderedImageInfos, progressModal);
 
 
 			// 步骤4: 处理YAML和Callout (75-90%)
@@ -703,46 +654,32 @@ export default class FeishuUploaderPlugin extends Plugin {
 			// 步骤5: 完成上传 (90-100%)
 			progressModal.updateProgress(95, '正在保存上传记录...');
 			
-			if (isSmartUpdate) {
-				// 智能更新：只更新现有记录的时间戳
-				await this.updateHistoryTimestamp(result.token);
-			} else {
-				// 正常上传：添加新的历史记录
-				const referencedDocs = this.settings.enableDoubleLinkMode && linkProcessor && linkResult && linkResult.uploadResults.size > 0 ? 
-					Array.from(linkResult.uploadResults.values()).map((result: any) => ({
-						title: result.title,
-						docToken: result.token,
-						url: result.url
-					})) : undefined;
-				
-				await this.addUploadHistory(title, result.url, result.token, undefined, referencedDocs);
-				
-				// 同时将引用文档作为独立记录添加到历史记录中
-				if (this.settings.enableDoubleLinkMode && referencedDocs && referencedDocs.length > 0) {
-					for (const refDoc of referencedDocs) {
-						await this.addUploadHistory(
-							refDoc.title, 
-							refDoc.url, 
-							refDoc.docToken, 
-							undefined, 
-							undefined, 
-							true // 标识为引用文档
-						);
-					}
+			const referencedDocs = this.settings.enableDoubleLinkMode && linkProcessor && linkResult && linkResult.uploadResults.size > 0 ? 
+				Array.from(linkResult.uploadResults.values()).map((result) => ({
+					title: result.title,
+					docToken: result.token,
+					url: result.url
+				})) : undefined;
+			
+			await this.addUploadHistory(title, result.url, result.token, undefined, referencedDocs);
+			
+			if (this.settings.enableDoubleLinkMode && referencedDocs && referencedDocs.length > 0) {
+				for (const refDoc of referencedDocs) {
+					await this.addUploadHistory(
+						refDoc.title, 
+						refDoc.url, 
+						refDoc.docToken, 
+						undefined, 
+						undefined, 
+						true // 标识为引用文档
+					);
 				}
 			}
 			
 			// 步骤6: 完成上传
 			progressModal.complete();
 			
-			// 根据上传类型决定后续操作
-			if (isSmartUpdate) {
-				// 智能更新完成，直接显示结果链接
-				new UploadResultModal(this.app, result.url, title, true).open();
-			} else {
-				// 正常上传，显示权限设置对话框
-				new DocumentPermissionModal(this.app, result.token, result.url, title, this, false).open();
-			}
+			new DocumentPermissionModal(this.app, result.token, result.url, title, this, false).open();
 			
 		} catch (error) {
 			const errorMessage = error instanceof Error ? error.message : String(error);
@@ -800,10 +737,10 @@ export default class FeishuUploaderPlugin extends Plugin {
 		file: TFile, 
 		content: string, 
 		hasImages: boolean, 
-		orderedImageInfos: any[], 
-		progressModal: any
-	): Promise<any> {
-		let result: any;
+		orderedImageInfos: ImageInfo[], 
+		progressModal: UploadProgressModal
+	): Promise<{ token: string; url: string }> {
+		let result: { token: string; url: string };
 		
 		if (hasImages) {
 			// 有图片：使用富文本模式，传递正确顺序的图片信息
@@ -944,7 +881,7 @@ export default class FeishuUploaderPlugin extends Plugin {
 	private showRetryDialog(file: TFile): void {
 		const modal = new RetryModal(this.app, () => {
 			// 重试上传
-			this.uploadFile(file);
+			void this.uploadFile(file);
 		});
 		modal.open();
 	}
@@ -980,7 +917,7 @@ export default class FeishuUploaderPlugin extends Plugin {
 		
 		// 只保存数据，不重新初始化客户端（加密敏感数据）
 		const encryptedSettings = await CryptoUtils.encryptSensitiveSettings(this.settings);
-		this.saveData(encryptedSettings);
+		await this.saveData(encryptedSettings);
 	}
 	
 	/**
@@ -992,12 +929,12 @@ export default class FeishuUploaderPlugin extends Plugin {
 			historyItem.permissions = permissions;
 			// 只保存数据，不重新初始化客户端（加密敏感数据）
 			const encryptedSettings = await CryptoUtils.encryptSensitiveSettings(this.settings);
-			this.saveData(encryptedSettings);
+			await this.saveData(encryptedSettings);
 		}
 	}
 
 	/**
-	 * 更新现有历史记录的时间戳（用于智能更新）
+	 * 更新现有历史记录的时间戳
 	 */
 	async updateHistoryTimestamp(docToken: string): Promise<void> {
 		const historyItem = this.settings.uploadHistory.find(item => item.docToken === docToken);
@@ -1020,7 +957,7 @@ export default class FeishuUploaderPlugin extends Plugin {
 			
 			// 只保存数据，不重新初始化客户端（加密敏感数据）
 			const encryptedSettings = await CryptoUtils.encryptSensitiveSettings(this.settings);
-			this.saveData(encryptedSettings);
+			await this.saveData(encryptedSettings);
 		}
 	}
 
@@ -1034,7 +971,7 @@ export default class FeishuUploaderPlugin extends Plugin {
 			this.settings.uploadHistory.splice(index, 1);
 			// 只保存数据，不重新初始化客户端（加密敏感数据）
 			const encryptedSettings = await CryptoUtils.encryptSensitiveSettings(this.settings);
-			this.saveData(encryptedSettings);
+			await this.saveData(encryptedSettings);
 		}
 	}
 
@@ -1075,7 +1012,7 @@ export default class FeishuUploaderPlugin extends Plugin {
 		this.settings.uploadHistory = [];
 		// 只保存数据，不重新初始化客户端（加密敏感数据）
 		const encryptedSettings = await CryptoUtils.encryptSensitiveSettings(this.settings);
-		this.saveData(encryptedSettings);
+		await this.saveData(encryptedSettings);
 		this.notificationManager.showNotice('已清空上传历史记录', 3000, 'history-cleared');
 	}
 
@@ -1086,7 +1023,7 @@ export default class FeishuUploaderPlugin extends Plugin {
 		this.settings.uploadCount = 0;
 		// 只保存数据，不重新初始化客户端（加密敏感数据）
 		const encryptedSettings = await CryptoUtils.encryptSensitiveSettings(this.settings);
-		this.saveData(encryptedSettings);
+		await this.saveData(encryptedSettings);
 		this.notificationManager.showNotice('已重置上传次数', 3000, 'count-reset');
 	}
 
@@ -1100,7 +1037,7 @@ export default class FeishuUploaderPlugin extends Plugin {
 		this.settings.apiCallCount++;
 		// 只保存数据，不重新初始化客户端（加密敏感数据）
 		const encryptedSettings = await CryptoUtils.encryptSensitiveSettings(this.settings);
-		this.saveData(encryptedSettings);
+		await this.saveData(encryptedSettings);
 		
 
 	}
@@ -1119,7 +1056,7 @@ export default class FeishuUploaderPlugin extends Plugin {
 			this.settings.lastResetDate = currentMonth;
 			// 只保存数据，不重新初始化客户端（加密敏感数据）
 			const encryptedSettings = await CryptoUtils.encryptSensitiveSettings(this.settings);
-			this.saveData(encryptedSettings);
+			await this.saveData(encryptedSettings);
 		}
 	}
 
@@ -1133,7 +1070,7 @@ export default class FeishuUploaderPlugin extends Plugin {
 		this.settings.lastResetDate = beijingTime.toISOString().substring(0, 7);
 		// 只保存数据，不重新初始化客户端（加密敏感数据）
 		const encryptedSettings = await CryptoUtils.encryptSensitiveSettings(this.settings);
-		this.saveData(encryptedSettings);
+		await this.saveData(encryptedSettings);
 		this.notificationManager.showNotice('已重置API调用次数', 3000, 'api-count-reset');
 	}
 
@@ -1149,7 +1086,13 @@ export default class FeishuUploaderPlugin extends Plugin {
 			
 			const result = await this.feishuClient.testConnection();
 			// 增加API调用计数
-			this.incrementApiCallCount();
+		void this.incrementApiCallCount().catch(error => {
+			const errorMessage = error instanceof Error ? error.message : String(error);
+			console.error(`[飞书插件] API调用计数更新失败: ${errorMessage}`);
+			if (this.settings.debugLoggingEnabled) {
+				console.debug('[飞书插件] API调用计数更新失败详情:', error);
+			}
+		});
 			return result;
 		} catch (error) {
 			const errorMessage = error instanceof Error ? error.message : String(error);
@@ -1187,7 +1130,7 @@ class DocumentPermissionModal extends Modal {
 		contentEl.empty();
 		contentEl.addClass('obshare-feishu-permission-modal');
 
-		contentEl.createEl('h2', { text: '设置文档权限' });
+		new Setting(contentEl).setName('设置文档权限').setHeading();
 		contentEl.createEl('p', { text: `为文档 "${this.title}" 设置访问权限` });
 
 		// 权限选项
@@ -1291,11 +1234,12 @@ class DocumentPermissionModal extends Modal {
 		const buttonContainer = contentEl.createDiv('obshare-modal-button-container');
 		
 		const submitButton = buttonContainer.createEl('button', { text: '提交设置', cls: 'mod-cta' });
-		submitButton.onclick = async () => {
+		submitButton.onclick = () => {
+			void (async () => {
 			// 收集用户选择
-			const isPublic = (publicCheckbox as HTMLInputElement).checked;
-			const allowCopy = (copyCheckbox as HTMLInputElement).checked;
-			const allowCreateCopy = (copyCreateCheckbox as HTMLInputElement).checked;
+			const isPublic = publicCheckbox.checked;
+			const allowCopy = copyCheckbox.checked;
+			const allowCreateCopy = copyCreateCheckbox.checked;
 			
 			const permissions = {
 				isPublic: isPublic,
@@ -1362,6 +1306,7 @@ class DocumentPermissionModal extends Modal {
 				submitButton.disabled = false;
 				submitButton.textContent = '提交设置';
 			}
+			})();
 		};
 	}
 
@@ -1390,7 +1335,7 @@ class DocumentPermissionModal extends Modal {
 	/**
 	 * 为引用文档设置相同的权限
 	 */
-	private async applyPermissionsToReferencedDocuments(permissions: any, userId: string): Promise<void> {
+	private async applyPermissionsToReferencedDocuments(permissions: PermissionSettings, userId: string): Promise<void> {
 		try {
 			// 获取当前文档的历史记录
 			const history = this.plugin.settings.uploadHistory.find(h => h.docToken === this.docToken);
@@ -1448,13 +1393,11 @@ class DocumentPermissionModal extends Modal {
 class UploadResultModal extends Modal {
 	private url: string;
 	private title: string;
-	private isSmartUpdate: boolean = false; // 是否为智能更新
 
-	constructor(app: App, url: string, title: string, isSmartUpdate: boolean = false) {
+	constructor(app: App, url: string, title: string) {
 		super(app);
 		this.url = url;
 		this.title = title;
-		this.isSmartUpdate = isSmartUpdate;
 	}
 
 	override onOpen() {
@@ -1462,13 +1405,10 @@ class UploadResultModal extends Modal {
 		contentEl.empty();
 		contentEl.addClass('obshare-feishu-success-modal');
 
-		// 根据是否为智能更新显示不同的成功提示
-		const successTitle = this.isSmartUpdate ? '更新成功！' : '上传成功！';
-		const successMessage = this.isSmartUpdate 
-			? `文档 "${this.title}" 已成功更新到飞书云文档` 
-			: `文档 "${this.title}" 已成功上传到飞书云文档`;
+		const successTitle = '上传成功！';
+		const successMessage = `文档 "${this.title}" 已成功上传到飞书云文档`;
 
-		contentEl.createEl('h2', { text: successTitle });
+		new Setting(contentEl).setName(successTitle).setHeading();
 		contentEl.createEl('p', { text: successMessage });
 
 		const linkEl = contentEl.createEl('a', {
@@ -1481,8 +1421,11 @@ class UploadResultModal extends Modal {
 		
 		const copyButton = buttonContainer.createEl('button', { text: '复制链接' });
 		copyButton.onclick = () => {
-			navigator.clipboard.writeText(this.url);
-			new Notice('链接已复制到剪贴板');
+			void navigator.clipboard.writeText(this.url).then(() => {
+				new Notice('链接已复制到剪贴板');
+			}).catch(() => {
+				new Notice('复制失败，请手动复制链接');
+			});
 		};
 
 		const openButton = buttonContainer.createEl('button', { text: '打开文档' });
@@ -1515,7 +1458,7 @@ class RetryModal extends Modal {
 		contentEl.empty();
 
 		// 标题
-		contentEl.createEl('h2', { text: '网络连接失败' });
+		new Setting(contentEl).setName('网络连接失败').setHeading();
 
 		// 说明文字
 		const descEl = contentEl.createEl('div', { cls: 'retry-modal-desc' });
@@ -1617,39 +1560,38 @@ class FeishuUploaderSettingTab extends PluginSettingTab {
 
 		// 添加GitHub链接和Star请求
 		const headerContainer = containerEl.createDiv({ cls: 'obshare-header-container' });
-		headerContainer.style.marginBottom = '20px';
-
-		// 标题栏
-		const titleRow = headerContainer.createDiv({ cls: 'obshare-title-row' });
-		titleRow.style.display = 'flex';
-		titleRow.style.alignItems = 'center';
-		titleRow.style.justifyContent = 'space-between';
-		titleRow.style.marginBottom = '10px';
-
-		const title = titleRow.createEl('h1', { text: '基础设置' });
-		title.style.marginBottom = '0';
+		const headerSetting = new Setting(headerContainer)
+			.setName('基础设置')
+			.setHeading();
+		headerSetting.nameEl.empty();
+		const titleRow = headerSetting.nameEl.createDiv({ cls: 'obshare-title-row' });
+		titleRow.createSpan({ text: '基础设置', cls: 'obshare-settings-title' });
 
 		const githubLink = titleRow.createEl('a', {
 			href: 'https://github.com/xigua222/ObShare',
 			cls: 'obshare-github-link'
 		});
 		githubLink.setAttribute('target', '_blank');
-		githubLink.style.display = 'flex';
-		githubLink.style.alignItems = 'center';
-		githubLink.style.gap = '6px';
-		githubLink.style.textDecoration = 'none';
-		githubLink.style.color = 'var(--text-normal)';
-		githubLink.style.padding = '4px 8px';
-		githubLink.style.borderRadius = '4px';
-		githubLink.style.border = '1px solid var(--background-modifier-border)';
-		githubLink.style.backgroundColor = 'var(--background-primary)';
-		githubLink.style.fontSize = '14px';
 
-		// 添加 GitHub SVG 图标
-		const iconSpan = githubLink.createSpan();
-		iconSpan.style.display = 'flex';
-		iconSpan.style.alignItems = 'center';
-		iconSpan.innerHTML = `<svg width="16" height="16" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg"><path fill-rule="evenodd" clip-rule="evenodd" d="M24 4C12.9543 4 4 12.9543 4 24C4 35.0457 12.9543 44 24 44C35.0457 44 44 35.0457 44 24C44 12.9543 35.0457 4 24 4ZM0 24C0 10.7452 10.7452 0 24 0C37.2548 0 48 10.7452 48 24C48 37.2548 37.2548 48 24 48C10.7452 48 0 37.2548 0 24Z" fill="currentColor"/><path fill-rule="evenodd" clip-rule="evenodd" d="M19.1833 45.4716C18.9898 45.2219 18.9898 42.9973 19.1833 38.798C17.1114 38.8696 15.8024 38.7258 15.2563 38.3667C14.437 37.828 13.6169 36.1667 12.8891 34.9959C12.1614 33.8251 10.5463 33.64 9.89405 33.3783C9.24182 33.1165 9.07809 32.0496 11.6913 32.8565C14.3044 33.6634 14.4319 35.8607 15.2563 36.3745C16.0806 36.8883 18.0515 36.6635 18.9448 36.2519C19.8382 35.8403 19.7724 34.3078 19.9317 33.7007C20.1331 33.134 19.4233 33.0083 19.4077 33.0037C18.5355 33.0037 13.9539 32.0073 12.6955 27.5706C11.437 23.134 13.0581 20.2341 13.9229 18.9875C14.4995 18.1564 14.4485 16.3852 13.7699 13.6737C16.2335 13.3589 18.1347 14.1343 19.4734 16.0001C19.4747 16.0108 21.2285 14.9572 24.0003 14.9572C26.772 14.9572 27.7553 15.8154 28.5142 16.0001C29.2731 16.1848 29.88 12.7341 34.5668 13.6737C33.5883 15.5969 32.7689 18.0001 33.3943 18.9875C34.0198 19.9749 36.4745 23.1147 34.9666 27.5706C33.9614 30.5413 31.9853 32.3523 29.0384 33.0037C28.7005 33.1115 28.5315 33.2855 28.5315 33.5255C28.5315 33.8856 28.9884 33.9249 29.6465 35.6117C30.0853 36.7362 30.117 39.948 29.7416 45.247C28.7906 45.4891 28.0508 45.6516 27.5221 45.7347C26.5847 45.882 25.5669 45.9646 24.5669 45.9965C23.5669 46.0284 23.2196 46.0248 21.837 45.8961C20.9154 45.8103 20.0308 45.6688 19.1833 45.4716Z" fill="currentColor"/></svg>`;
+		const iconSpan = githubLink.createSpan({ cls: 'obshare-github-link-icon' });
+		const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+		svg.setAttribute('width', '16');
+		svg.setAttribute('height', '16');
+		svg.setAttribute('viewBox', '0 0 48 48');
+		svg.setAttribute('fill', 'none');
+		const pathOuter = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+		pathOuter.setAttribute('fill-rule', 'evenodd');
+		pathOuter.setAttribute('clip-rule', 'evenodd');
+		pathOuter.setAttribute('d', 'M24 4C12.9543 4 4 12.9543 4 24C4 35.0457 12.9543 44 24 44C35.0457 44 44 35.0457 44 24C44 12.9543 35.0457 4 24 4ZM0 24C0 10.7452 10.7452 0 24 0C37.2548 0 48 10.7452 48 24C48 37.2548 37.2548 48 24 48C10.7452 48 0 37.2548 0 24Z');
+		pathOuter.setAttribute('fill', 'currentColor');
+		const pathInner = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+		pathInner.setAttribute('fill-rule', 'evenodd');
+		pathInner.setAttribute('clip-rule', 'evenodd');
+		pathInner.setAttribute('d', 'M19.1833 45.4716C18.9898 45.2219 18.9898 42.9973 19.1833 38.798C17.1114 38.8696 15.8024 38.7258 15.2563 38.3667C14.437 37.828 13.6169 36.1667 12.8891 34.9959C12.1614 33.8251 10.5463 33.64 9.89405 33.3783C9.24182 33.1165 9.07809 32.0496 11.6913 32.8565C14.3044 33.6634 14.4319 35.8607 15.2563 36.3745C16.0806 36.8883 18.0515 36.6635 18.9448 36.2519C19.8382 35.8403 19.7724 34.3078 19.9317 33.7007C20.1331 33.134 19.4233 33.0083 19.4077 33.0037C18.5355 33.0037 13.9539 32.0073 12.6955 27.5706C11.437 23.134 13.0581 20.2341 13.9229 18.9875C14.4995 18.1564 14.4485 16.3852 13.7699 13.6737C16.2335 13.3589 18.1347 14.1343 19.4734 16.0001C19.4747 16.0108 21.2285 14.9572 24.0003 14.9572C26.772 14.9572 27.7553 15.8154 28.5142 16.0001C29.2731 16.1848 29.88 12.7341 34.5668 13.6737C33.5883 15.5969 32.7689 18.0001 33.3943 18.9875C34.0198 19.9749 36.4745 23.1147 34.9666 27.5706C33.9614 30.5413 31.9853 32.3523 29.0384 33.0037C28.7005 33.1115 28.5315 33.2855 28.5315 33.5255C28.5315 33.8856 28.9884 33.9249 29.6465 35.6117C30.0853 36.7362 30.117 39.948 29.7416 45.247C28.7906 45.4891 28.0508 45.6516 27.5221 45.7347C26.5847 45.882 25.5669 45.9646 24.5669 45.9965C23.5669 46.0284 23.2196 46.0248 21.837 45.8961C20.9154 45.8103 20.0308 45.6688 19.1833 45.4716Z');
+		pathInner.setAttribute('fill', 'currentColor');
+		svg.appendChild(pathOuter);
+		svg.appendChild(pathInner);
+		iconSpan.appendChild(svg);
 
 		githubLink.createSpan({ text: 'Star on GitHub' });
 
@@ -1658,11 +1600,6 @@ class FeishuUploaderSettingTab extends PluginSettingTab {
 			text: '插件完全免费开源，如果您喜欢这个插件，恳请帮忙点个 star，这会是对作者极大的鼓励~',
 			cls: 'obshare-encourage-text'
 		});
-		encourageText.style.color = 'var(--text-muted)';
-		encourageText.style.fontSize = '12px';
-		encourageText.style.textAlign = 'right';
-		encourageText.style.marginTop = '0px';
-		encourageText.style.marginBottom = '10px';
 
 		// 说明文档
 		const descEl = containerEl.createDiv();
@@ -1682,9 +1619,9 @@ class FeishuUploaderSettingTab extends PluginSettingTab {
 			.addText(text => text
 				.setPlaceholder('输入App ID')
 				.setValue(this.plugin.settings.appId)
-				.onChange(async (value) => {
+				.onChange((value) => {
 					this.plugin.settings.appId = value;
-					await this.plugin.saveSettings();
+					void this.plugin.saveSettings();
 				}));
 		appIdSetting.nameEl.empty();
 		appIdSetting.nameEl.createSpan({ text: 'App ID ' });
@@ -1697,9 +1634,9 @@ class FeishuUploaderSettingTab extends PluginSettingTab {
 			.addText(text => text
 				.setPlaceholder('输入App Secret')
 				.setValue(this.plugin.settings.appSecret)
-				.onChange(async (value) => {
+				.onChange((value) => {
 					this.plugin.settings.appSecret = value;
-					await this.plugin.saveSettings();
+					void this.plugin.saveSettings();
 				}));
 		appSecretSetting.nameEl.empty();
 		appSecretSetting.nameEl.createSpan({ text: 'App Secret ' });
@@ -1712,9 +1649,9 @@ class FeishuUploaderSettingTab extends PluginSettingTab {
 			.addText(text => text
 				.setPlaceholder('输入您的飞书用户ID')
 				.setValue(this.plugin.settings.userId)
-				.onChange(async (value) => {
+				.onChange((value) => {
 					this.plugin.settings.userId = value;
-					await this.plugin.saveSettings();
+					void this.plugin.saveSettings();
 				}));
 		userIdSetting.nameEl.empty();
 		userIdSetting.nameEl.createSpan({ text: '用户ID ' });
@@ -1727,58 +1664,36 @@ class FeishuUploaderSettingTab extends PluginSettingTab {
 			.addText(text => text
 				.setPlaceholder('输入文件夹Token')
 				.setValue(this.plugin.settings.folderToken)
-				.onChange(async (value) => {
+				.onChange((value) => {
 					this.plugin.settings.folderToken = value;
-					await this.plugin.saveSettings();
+					void this.plugin.saveSettings();
 				}));
 		folderTokenSetting.nameEl.empty();
 		folderTokenSetting.nameEl.createSpan({ text: '文件夹Token ' });
 		folderTokenSetting.nameEl.createSpan({ text: '*', cls: 'obshare-required-field' });
 
 		// 双链模式设置
-		containerEl.createEl('h1', { text: '上传设置' });
+		new Setting(containerEl).setName('上传设置').setHeading();
 		
 		new Setting(containerEl)
 			.setName('双链模式')
 			.setDesc('双链模式可以自动帮你上传文档内所有[[]]引用的文档，自动建立链接，使得您的分享更加便捷完整，但在引用文档数量多的情况下，可能使上传速度变慢，需要等待更久。')
 			.addToggle(toggle => toggle
 				.setValue(this.plugin.settings.enableDoubleLinkMode)
-				.onChange(async (value) => {
+				.onChange((value) => {
 					this.plugin.settings.enableDoubleLinkMode = value;
-					await this.plugin.saveSettings();
+					void this.plugin.saveSettings();
 				}));
 
-		/*
-		const smartUpdateSetting = new Setting(containerEl)
-			.setName('增量更新')
-			.setDesc('启用后，如果您曾经上传过该文档，再次上传时将更新原有文档内容，而不是创建新文档。这样可以保持原有的分享链接、权限设置和评论不变。');
-		
-		const betaTag = smartUpdateSetting.nameEl.createSpan({ text: 'Beta', cls: 'obshare-beta-tag' });
-		betaTag.style.fontSize = '12px';
-		betaTag.style.marginLeft = '8px';
-		betaTag.style.backgroundColor = 'var(--interactive-accent)';
-		betaTag.style.color = 'var(--text-on-accent)';
-		betaTag.style.padding = '2px 6px';
-		betaTag.style.borderRadius = '4px';
-		betaTag.style.fontWeight = 'bold';
-
-		smartUpdateSetting.addToggle(toggle => toggle
-				.setValue(this.plugin.settings.enableSmartUpdate)
-				.onChange(async (value) => {
-					this.plugin.settings.enableSmartUpdate = value;
-					await this.plugin.saveSettings();
-				}));
-		*/
-		
 		new Setting(containerEl)
 			.setName('调试日志')
 			.setDesc('启用后会在开发者控制台输出调试信息，用于排查问题。')
 			.addToggle(toggle => toggle
 				.setValue(this.plugin.settings.debugLoggingEnabled)
-				.onChange(async (value) => {
+				.onChange((value) => {
 					this.plugin.settings.debugLoggingEnabled = value;
 					this.plugin.applyDebugLoggingSetting();
-					await this.plugin.saveSettings();
+					void this.plugin.saveSettings();
 				}));
 
 		// 测试连接按钮
@@ -1787,34 +1702,36 @@ class FeishuUploaderSettingTab extends PluginSettingTab {
 			.setDesc('测试飞书API连接是否正常')
 			.addButton(button => button
 				.setButtonText('测试连接')
-				.onClick(async () => {
-					if (!this.plugin.feishuClient) {
-						this.plugin.notificationManager.showNotice('请先配置App ID和App Secret', 4000, 'missing-config');
-						return;
-					}
-					
-					try {
-				button.setButtonText('测试中...');
-				const success = await this.plugin.testNetworkConnection();
-				if (success) {
-					this.plugin.notificationManager.showNotice('网络连接测试成功！', 3000, 'test-success');
-				} else {
-					new Notice('网络连接测试失败，请检查网络和配置');
-				}
-			} catch (error) {
-				const errorMessage = error instanceof Error ? error.message : String(error);
-				if (errorMessage.includes('网络连接失败')) {
-					new Notice('网络连接失败，请检查网络连接后重试');
-				} else {
-					new Notice(`连接测试失败: ${errorMessage}`);
-				}
-			} finally {
-				button.setButtonText('测试连接');
-			}
+				.onClick(() => {
+					void (async () => {
+						if (!this.plugin.feishuClient) {
+							this.plugin.notificationManager.showNotice('请先配置App ID和App Secret', 4000, 'missing-config');
+							return;
+						}
+						
+						try {
+							button.setButtonText('测试中...');
+							const success = await this.plugin.testNetworkConnection();
+							if (success) {
+								this.plugin.notificationManager.showNotice('网络连接测试成功！', 3000, 'test-success');
+							} else {
+								new Notice('网络连接测试失败，请检查网络和配置');
+							}
+						} catch (error) {
+							const errorMessage = error instanceof Error ? error.message : String(error);
+							if (errorMessage.includes('网络连接失败')) {
+								new Notice('网络连接失败，请检查网络连接后重试');
+							} else {
+								new Notice(`连接测试失败: ${errorMessage}`);
+							}
+						} finally {
+							button.setButtonText('测试连接');
+						}
+					})();
 				}));
 
 		// 数据统计
-		containerEl.createEl('h1', { text: '数据统计' });
+		new Setting(containerEl).setName('数据统计').setHeading();
 		
 		// 显示分享文档数
 		new Setting(containerEl)
@@ -1844,7 +1761,7 @@ class FeishuUploaderSettingTab extends PluginSettingTab {
 				}));
 
 		// 发布管理
-		containerEl.createEl('h1', { text: '分享管理' });
+		new Setting(containerEl).setName('分享管理').setHeading();
 		
 		if (this.plugin.settings.uploadHistory.length === 0) {
 			containerEl.createEl('p', { text: '暂无上传记录', cls: 'obshare-upload-history-empty' });
@@ -1932,8 +1849,11 @@ class FeishuUploaderSettingTab extends PluginSettingTab {
 						cls: 'obshare-upload-history-copy-icon'
 					});
 					copyIcon.onclick = () => {
-						navigator.clipboard.writeText(item.url);
-						new Notice('链接已复制到剪贴板');
+						void navigator.clipboard.writeText(item.url).then(() => {
+							new Notice('链接已复制到剪贴板');
+						}).catch(() => {
+							new Notice('复制失败，请手动复制链接');
+						});
 					};
 					
 					// 权限管理图标
@@ -1959,49 +1879,82 @@ class FeishuUploaderSettingTab extends PluginSettingTab {
 						text: '删除',
 						cls: 'obshare-upload-history-copy-icon'
 					});
-					deleteIcon.onclick = async () => {
-						// 确认删除
-						const confirmed = confirm(`确定要删除文件 "${item.title}" 吗？\n\n注意：此操作将删除飞书云文档中的文件！`);
-						if (!confirmed) {
-							return;
-						}
+					deleteIcon.onclick = () => {
+						const modal = new DeleteConfirmationModal(
+							this.app,
+							`确定要删除文件 "${item.title}" 吗？\n\n注意：此操作将删除飞书云文档中的文件！`,
+							async () => {
+								await this.plugin.deleteHistoryItem(item.docToken);
+								this.display();
 
-						// 立即从历史记录中移除
-						await this.plugin.deleteHistoryItem(item.docToken);
-						
-						// 立即刷新设置页面以更新列表显示
-						this.display();
-
-						// 异步调用API删除文件
-						try {
-							if (this.plugin.feishuClient) {
-								await this.plugin.feishuClient.deleteFile(item.docToken);
-								await this.plugin.incrementApiCallCount();
+								try {
+									if (this.plugin.feishuClient) {
+										await this.plugin.feishuClient.deleteFile(item.docToken);
+										await this.plugin.incrementApiCallCount();
+									}
+								} catch (error) {
+									const errorMessage = error instanceof Error ? error.message : String(error);
+									console.error(`[设置页面] API删除文件失败: ${errorMessage}`);
+									if (this.plugin.settings.debugLoggingEnabled) {
+										console.debug('[设置页面] API删除文件失败详情:', error);
+									}
+									if (error instanceof Error && (error.message.includes('404') || error.message.includes('not found'))) {
+										this.plugin.notificationManager.showNotice(
+											'删除失败，请您在飞书云文档中自行尝试删除。',
+											5000
+										);
+									} else {
+										this.plugin.notificationManager.showNotice(
+											'删除失败，请您在飞书云文档中自行尝试删除。',
+											5000
+										);
+									}
+								}
 							}
-						} catch (error) {
-							const errorMessage = error instanceof Error ? error.message : String(error);
-							console.error(`[设置页面] API删除文件失败: ${errorMessage}`);
-							if (this.plugin.settings.debugLoggingEnabled) {
-								console.debug('[设置页面] API删除文件失败详情:', error);
-							}
-							// 检查是否是404错误
-							if (error instanceof Error && (error.message.includes('404') || error.message.includes('not found'))) {
-								this.plugin.notificationManager.showNotice(
-									'删除失败，请您在飞书云文档中自行尝试删除。',
-									5000
-								);
-							} else {
-								// 其他错误也显示相同提示
-								this.plugin.notificationManager.showNotice(
-									'删除失败，请您在飞书云文档中自行尝试删除。',
-									5000
-								);
-							}
-						}
+						);
+						modal.open();
 					};
 				});
 			});
 		}
+	}
+}
+
+class DeleteConfirmationModal extends Modal {
+	private message: string;
+	private onConfirm: () => void | Promise<void>;
+
+	constructor(app: App, message: string, onConfirm: () => void | Promise<void>) {
+		super(app);
+		this.message = message;
+		this.onConfirm = onConfirm;
+	}
+
+	override onOpen() {
+		const { contentEl } = this;
+		contentEl.empty();
+
+		new Setting(contentEl).setName('确认删除').setHeading();
+		contentEl.createEl('p', { text: this.message });
+
+		const buttonContainer = contentEl.createDiv('obshare-modal-button-container');
+		const confirmButton = buttonContainer.createEl('button', { text: '确认删除', cls: 'mod-warning' });
+		const cancelButton = buttonContainer.createEl('button', { text: '取消' });
+
+		cancelButton.onclick = () => {
+			this.close();
+		};
+
+		confirmButton.onclick = () => {
+			void Promise.resolve(this.onConfirm()).finally(() => {
+				this.close();
+			});
+		};
+	}
+
+	override onClose() {
+		const { contentEl } = this;
+		contentEl.empty();
 	}
 }
 
@@ -2029,7 +1982,7 @@ class CalloutConversionModal extends Modal {
 		const { contentEl } = this;
 		contentEl.empty();
 
-		contentEl.createEl('h2', { text: 'Callout 转换确认' });
+		new Setting(contentEl).setName('Callout 转换确认').setHeading();
 		contentEl.createEl('p', { 
 			text: `发现 ${this.callouts.length} 个 Callout 块，请选择要转换为飞书高亮块的项目：` 
 		});
@@ -2132,7 +2085,7 @@ class CalloutConversionModal extends Modal {
 }
 
 class UploadProgressModal extends Modal {
-	private progressBar!: HTMLProgressElement;
+	private progressBar!: HTMLElement;
 	private progressText!: HTMLElement;
 	private stepText!: HTMLElement;
 	private titleElement!: HTMLElement; // 添加标题元素引用
@@ -2142,11 +2095,9 @@ class UploadProgressModal extends Modal {
 	private fakeProgressTimer: NodeJS.Timeout | null = null;
 	private lastRealProgress: number = 0;
 	private maxFakeProgress: number = 90; // 伪进度最大值
-	private isSmartUpdate: boolean = false; // 是否为智能更新
 
-	constructor(app: App, isSmartUpdate: boolean = false) {
+	constructor(app: App) {
 		super(app);
-		this.isSmartUpdate = isSmartUpdate;
 	}
 
 	override onOpen() {
@@ -2154,9 +2105,10 @@ class UploadProgressModal extends Modal {
 		contentEl.empty();
 		contentEl.addClass('obshare-feishu-upload-progress-modal');
 
-		// 标题 - 根据是否为智能更新显示不同文本
-		const titleText = this.isSmartUpdate ? '正在增量更新文档' : '正在上传文档';
-		this.titleElement = contentEl.createEl('h2', { text: titleText, cls: 'obshare-progress-modal-title' });
+		const titleText = '正在上传文档';
+		const titleSetting = new Setting(contentEl).setName(titleText).setHeading();
+		this.titleElement = titleSetting.nameEl;
+		this.titleElement.addClass('obshare-progress-modal-title');
 
 		// 步骤提示
 		this.stepText = contentEl.createEl('div', { text: '准备上传...', cls: 'obshare-progress-modal-step' });
@@ -2171,21 +2123,14 @@ class UploadProgressModal extends Modal {
 		const progressBarBg = progressContainer.createEl('div', { cls: 'obshare-progress-bar' });
 		
 		// 进度条填充
-		this.progressBar = progressBarBg.createEl('div', { cls: 'obshare-progress-fill' }) as unknown as HTMLProgressElement;
-		this.progressBar.style.width = '0%';
+		this.progressBar = progressBarBg.createEl('div', { cls: 'obshare-progress-fill' });
+		this.progressBar.setCssProps({ '--obshare-progress-width': '0%' });
 
 		// 步骤提示
 		this.stepText = contentEl.createEl('div', { text: '准备上传...', cls: 'obshare-progress-modal-step' });
-		this.stepText.style.marginTop = '15px';
-		this.stepText.style.textAlign = 'center';
-		this.stepText.style.color = 'var(--text-muted)';
 
 		// 提示文本
-		const hintText = contentEl.createEl('div', { text: '请保持网络连接，不要关闭此窗口', cls: 'obshare-progress-hint' });
-		hintText.style.marginTop = '10px';
-		hintText.style.textAlign = 'center';
-		hintText.style.fontSize = '12px';
-		hintText.style.color = 'var(--text-faint)';
+		contentEl.createEl('div', { text: '请保持网络连接，不要关闭此窗口', cls: 'obshare-progress-hint' });
 		
 		// 启动伪进度
 		this.startFakeProgress();
@@ -2218,18 +2163,6 @@ class UploadProgressModal extends Modal {
 	}
 
 	/**
-	 * 更新弹窗标题
-	 * @param isSmartUpdate 是否为智能更新模式
-	 */
-	updateTitle(isSmartUpdate: boolean) {
-		this.isSmartUpdate = isSmartUpdate;
-		if (this.titleElement) {
-			const titleText = isSmartUpdate ? '正在增量更新文档' : '正在上传文档';
-			this.titleElement.textContent = titleText;
-		}
-	}
-
-	/**
 	 * 设置进度条显示
 	 * @param progress 进度百分比
 	 */
@@ -2237,7 +2170,7 @@ class UploadProgressModal extends Modal {
 		this.currentProgress = progress;
 		
 		if (this.progressBar) {
-			this.progressBar.style.width = `${this.currentProgress}%`;
+			this.progressBar.setCssProps({ '--obshare-progress-width': `${this.currentProgress}%` });
 		}
 		
 		if (this.progressText) {
@@ -2343,7 +2276,7 @@ class UserAgreementModal extends Modal {
 		contentEl.addClass('obshare-user-agreement-modal');
 
 		// 标题
-		contentEl.createEl('h2', { text: 'ObShare 用户协议' });
+		new Setting(contentEl).setName('ObShare 用户协议').setHeading();
 
 		// 协议内容容器（可滚动）
 		const agreementContainer = contentEl.createDiv({ cls: 'obshare-agreement-content' });
@@ -2400,7 +2333,7 @@ class UserAgreementModal extends Modal {
 3. **插件终止使用**。若发现本插件存在严重安全漏洞、恶意行为或违反开源原则的情况，作者有权立即停止维护或发布终止版本。届时建议用户尽快迁移数据并停止使用。`;
 
 		// 使用MarkdownRenderer渲染协议内容
-		MarkdownRenderer.renderMarkdown(agreementText, agreementContainer, '', this.component);
+		void MarkdownRenderer.render(this.app, agreementText, agreementContainer, '', this.component);
 
 		// 按钮容器
 		const buttonContainer = contentEl.createDiv({ cls: 'obshare-agreement-buttons' });

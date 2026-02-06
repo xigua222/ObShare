@@ -31,6 +31,17 @@ export interface UploadResult {
     title: string;
 }
 
+type LinkProcessorPluginContext = {
+    settings: {
+        folderToken: string;
+    };
+    updateHistoryPermissions?: (docToken: string, permissions: {
+        isPublic: boolean;
+        allowCopy: boolean;
+        allowCreateCopy: boolean;
+    }) => Promise<void> | void;
+};
+
 /**
  * 双链处理器类
  * 负责处理Obsidian双链格式的笔记上传
@@ -39,7 +50,7 @@ export class LinkProcessor {
     private app: App;
     private vault: Vault;
     private feishuClient: FeishuApiClient;
-    private plugin: any; // 主插件实例，用于调用uploadFile方法
+    private plugin: LinkProcessorPluginContext;
     private uploadedDocuments: Map<string, UploadResult> = new Map(); // 缓存已上传的文档
     private processingDocuments: Set<string> = new Set(); // 正在处理的文档，防止循环引用
     private static debugEnabled = false;
@@ -48,13 +59,13 @@ export class LinkProcessor {
         this.debugEnabled = enabled;
     }
 
-    private debug(...args: any[]): void {
+    private debug(...args: unknown[]): void {
         if (LinkProcessor.debugEnabled) {
             console.debug(...args);
         }
     }
 
-    private logError(summary: string, error: unknown, details?: any): void {
+    private logError(summary: string, error: unknown, details?: Record<string, unknown>): void {
         const errorMessage = error instanceof Error ? error.message : String(error);
         console.error(summary, errorMessage);
         this.debug(`${summary} 详情:`, {
@@ -65,7 +76,7 @@ export class LinkProcessor {
         });
     }
 
-    constructor(app: App, feishuClient: FeishuApiClient, plugin: any) {
+    constructor(app: App, feishuClient: FeishuApiClient, plugin: LinkProcessorPluginContext) {
         this.app = app;
         this.vault = app.vault;
         this.feishuClient = feishuClient;

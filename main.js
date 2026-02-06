@@ -220,6 +220,32 @@ SvgConverter.DEFAULT_HEIGHT = 600;
 SvgConverter.DEFAULT_SCALE = 4;
 
 // feishu-api.ts
+var getErrorMeta = (error) => {
+  if (typeof error !== "object" || error === null) {
+    return {};
+  }
+  const meta = error;
+  const result = {};
+  if (meta.status !== void 0) {
+    result.status = meta.status;
+  }
+  if (meta.statusText !== void 0) {
+    result.statusText = meta.statusText;
+  }
+  if (meta.response !== void 0) {
+    result.response = meta.response;
+  }
+  if (meta.json !== void 0) {
+    result.json = meta.json;
+  }
+  if (meta.headers !== void 0) {
+    result.headers = meta.headers;
+  }
+  return result;
+};
+var isImportTaskQueryResponse = (value) => {
+  return typeof value === "object" && value !== null && "job_status" in value;
+};
 var _FeishuApiClient = class {
   // 每次删除请求间隔350ms，确保不超过每秒3次
   constructor(appId, appSecret, app, apiCallCountCallback) {
@@ -302,11 +328,13 @@ var _FeishuApiClient = class {
           const result = await request();
           resolve(result);
         } catch (error) {
-          reject(error);
+          reject(error instanceof Error ? error : new Error(String(error)));
         }
       };
       this.deleteRequestQueue.push(wrappedRequest);
-      this.processDeleteQueue().catch(reject);
+      this.processDeleteQueue().catch((error) => {
+        reject(error instanceof Error ? error : new Error(String(error)));
+      });
     });
   }
   /**
@@ -359,7 +387,7 @@ var _FeishuApiClient = class {
         throw new Error(`\u83B7\u53D6\u8BBF\u95EE\u4EE4\u724C\u5931\u8D25: ${result.msg}`);
       }
       this.accessToken = result.tenant_access_token;
-      this.tokenExpireTime = now + result.expire * 1e3;
+      this.tokenExpireTime = now + (result.expire || 0) * 1e3;
       return this.accessToken;
     } catch (error) {
       this.logError("[\u98DE\u4E66API] \u83B7\u53D6\u8BBF\u95EE\u4EE4\u724C\u5931\u8D25:", error);
@@ -653,23 +681,24 @@ var _FeishuApiClient = class {
         throw new Error(`\u521B\u5EFA\u5BFC\u5165\u4EFB\u52A1\u5931\u8D25 (\u9519\u8BEF\u7801: ${result.code}): ${result.msg}`);
       }
     } catch (error) {
-      if (error.status === 400 && error.json) {
+      const errorMeta = getErrorMeta(error);
+      if (errorMeta.status === 400 && errorMeta.json) {
         console.error("[\u98DE\u4E66API] \u521B\u5EFA\u5BFC\u5165\u4EFB\u52A1\u5931\u8D25 (HTTP 400)");
         this.debug("[\u98DE\u4E66API] HTTP 400\u9519\u8BEF\uFF0C\u8BE6\u7EC6\u54CD\u5E94:", {
-          status: error.status,
-          responseBody: error.json,
-          headers: error.headers
+          status: errorMeta.status,
+          responseBody: errorMeta.json,
+          headers: errorMeta.headers
         });
-        const errorResult = error.json;
-        if (errorResult.code && errorResult.msg) {
+        if (typeof errorMeta.json === "object" && errorMeta.json !== null && "code" in errorMeta.json && "msg" in errorMeta.json) {
+          const errorResult = errorMeta.json;
           throw new Error(`\u521B\u5EFA\u5BFC\u5165\u4EFB\u52A1\u5931\u8D25 (\u9519\u8BEF\u7801: ${errorResult.code}): ${errorResult.msg}`);
         }
       }
       this.logError("[\u98DE\u4E66API] \u521B\u5EFA\u98DE\u4E66\u5BFC\u5165\u4EFB\u52A1\u5931\u8D25:", error, {
         requestUrl: url,
         hasToken: !!token,
-        status: error.status || "unknown",
-        responseBody: error.json || "no response body"
+        status: errorMeta.status || "unknown",
+        responseBody: errorMeta.json || "no response body"
       });
       const errorMessage = error instanceof Error ? error.message : String(error);
       throw new Error(`\u521B\u5EFA\u5BFC\u5165\u4EFB\u52A1\u5931\u8D25: ${errorMessage}`);
@@ -680,7 +709,7 @@ var _FeishuApiClient = class {
    * @param ticket 任务票据
    */
   async queryImportTask(ticket) {
-    var _a, _b;
+    var _a;
     const token = await this.getAccessToken();
     const url = `${this.baseUrl}/drive/v1/import_tasks/${ticket}`;
     const requestParam = {
@@ -704,7 +733,15 @@ var _FeishuApiClient = class {
         });
         throw new Error(`\u67E5\u8BE2\u5BFC\u5165\u4EFB\u52A1\u5931\u8D25: [${result.code}] ${result.msg}`);
       }
-      const taskResult = ((_b = result.data) == null ? void 0 : _b.result) || result.data;
+      let taskResult;
+      if (typeof result.data === "object" && result.data !== null && "result" in result.data) {
+        taskResult = result.data.result;
+      } else if (isImportTaskQueryResponse(result.data)) {
+        taskResult = result.data;
+      }
+      if (!taskResult) {
+        throw new Error("\u5BFC\u5165\u4EFB\u52A1\u7ED3\u679C\u4E3A\u7A7A");
+      }
       return taskResult;
     } catch (error) {
       this.logError("[\u98DE\u4E66API] \u67E5\u8BE2\u5BFC\u5165\u4EFB\u52A1\u5F02\u5E38:", error, {
@@ -996,14 +1033,14 @@ var _FeishuApiClient = class {
     try {
       let fullPath = imagePath;
       if (imagePath.match(/^[A-Za-z]:/) || imagePath.startsWith("/")) {
-        const fileName = imagePath.split(/[\/\\]/).pop();
+        const fileName = imagePath.split(/[/\\]/).pop();
         if (fileName) {
           fullPath = fileName;
         }
       } else {
         fullPath = imagePath.replace(/^\.\//, "");
       }
-      const file = await this.searchImageInVault(fullPath);
+      const file = this.searchImageInVault(fullPath);
       if (!file) {
         console.warn("[\u98DE\u4E66API] \u65E0\u6CD5\u627E\u5230\u56FE\u7247\u6587\u4EF6:", fullPath);
         return null;
@@ -1039,7 +1076,7 @@ var _FeishuApiClient = class {
    * @returns base64编码的图片内容和SVG转换选项（如果是SVG）
    */
   async readImageFileAsBase64(imagePath) {
-    var _a, _b, _c;
+    var _a;
     try {
       if (imagePath.startsWith("http://") || imagePath.startsWith("https://")) {
         this.debug("[\u98DE\u4E66API] \u68C0\u6D4B\u5230\u8FDC\u7A0B\u56FE\u7247\uFF0C\u5F00\u59CB\u4E0B\u8F7D:", imagePath);
@@ -1055,7 +1092,7 @@ var _FeishuApiClient = class {
           return null;
         }
       }
-      const fileName = imagePath.split(/[\\/]/).pop() || imagePath;
+      const fileName = imagePath.split(/[/\\]/).pop() || imagePath;
       if (_FeishuApiClient.isMermaidTempImage(fileName)) {
         const cachedData = _FeishuApiClient.getMermaidImageFromCache(fileName);
         if (cachedData) {
@@ -1074,29 +1111,33 @@ var _FeishuApiClient = class {
       }
       let fullPath = imagePath;
       if (imagePath.match(/^[A-Za-z]:/) || imagePath.startsWith("/")) {
-        const fileName2 = imagePath.split(/[\\/]/).pop();
+        const fileName2 = imagePath.split(/[/\\]/).pop();
         if (fileName2) {
           fullPath = fileName2;
         }
       } else {
         fullPath = imagePath.replace(/^\.\//, "");
       }
-      let file = (_b = (_a = this.app) == null ? void 0 : _a.vault) == null ? void 0 : _b.getAbstractFileByPath(fullPath);
+      const app = this.app;
+      if (!app) {
+        throw new Error("App \u672A\u521D\u59CB\u5316");
+      }
+      let file = null;
+      const abstractFile = app.vault.getAbstractFileByPath(fullPath);
+      if (abstractFile instanceof import_obsidian.TFile) {
+        file = abstractFile;
+      }
       if (!file) {
         this.debug("[\u98DE\u4E66API] \u76F4\u63A5\u8DEF\u5F84\u672A\u627E\u5230\uFF0C\u5F00\u59CB\u5728vault\u4E2D\u641C\u7D22\u6587\u4EF6:", fullPath);
-        file = await this.searchImageInVault(fullPath);
+        file = this.searchImageInVault(fullPath);
       }
       if (!file) {
         console.error("[\u98DE\u4E66API] \u627E\u4E0D\u5230\u56FE\u7247\u6587\u4EF6:", fullPath);
         return null;
       }
-      if (!("extension" in file)) {
-        console.error("[\u98DE\u4E66API] \u8DEF\u5F84\u4E0D\u662F\u6709\u6548\u7684\u6587\u4EF6:", file.path);
-        return null;
-      }
-      const fileExtension = (_c = file.extension) == null ? void 0 : _c.toLowerCase();
+      const fileExtension = (_a = file.extension) == null ? void 0 : _a.toLowerCase();
       if (fileExtension === "svg") {
-        const svgContent = await this.app.vault.read(file);
+        const svgContent = await app.vault.read(file);
         if (!SvgConverter.isSvgFile(file.name, svgContent)) {
           console.error("[\u98DE\u4E66API] \u65E0\u6548\u7684SVG\u6587\u4EF6:", file.path);
           return null;
@@ -1119,7 +1160,7 @@ var _FeishuApiClient = class {
           return null;
         }
       } else {
-        const arrayBuffer = await this.app.vault.readBinary(file);
+        const arrayBuffer = await app.vault.readBinary(file);
         const uint8Array = new Uint8Array(arrayBuffer);
         const binaryString = Array.from(uint8Array, (byte) => String.fromCharCode(byte)).join("");
         const base64Content = btoa(binaryString);
@@ -1137,12 +1178,12 @@ var _FeishuApiClient = class {
    * @param fileName 文件名或路径
    * @returns 找到的文件对象
    */
-  async searchImageInVault(fileName) {
+  searchImageInVault(fileName) {
     var _a;
     if (!((_a = this.app) == null ? void 0 : _a.vault)) {
       return null;
     }
-    const targetFileName = fileName.split(/[\\/]/).pop();
+    const targetFileName = fileName.split(/[/\\]/).pop();
     if (!targetFileName) {
       return null;
     }
@@ -1199,7 +1240,7 @@ var _FeishuApiClient = class {
   static extractImageInfoFromMarkdown(markdownContent, basePath) {
     const imageInfos = [];
     const convertedContent = _FeishuApiClient.convertObsidianImageSyntax(markdownContent);
-    const markdownImageRegex = /!\[([^\]]*)\]\(([^\)\s]+)(?:\s+"([^"]*)")?\)/g;
+    const markdownImageRegex = /!\[([^\]]*)\]\(([^)\s]+)(?:\s+"([^"]*)")?\)/g;
     let match;
     let position = 0;
     while ((match = markdownImageRegex.exec(convertedContent)) !== null) {
@@ -1219,6 +1260,15 @@ var _FeishuApiClient = class {
     }
     return imageInfos;
   }
+  static encodeBase64Utf8(content) {
+    const encoder = new TextEncoder();
+    const bytes = encoder.encode(content);
+    let binary = "";
+    for (const byte of bytes) {
+      binary += String.fromCharCode(byte);
+    }
+    return btoa(binary);
+  }
   /**
    * 直接上传文件到飞书云盘
    * @param fileName 文件名
@@ -1231,7 +1281,7 @@ var _FeishuApiClient = class {
       onProgress == null ? void 0 : onProgress("\u6B63\u5728\u5904\u7406\u6587\u6863\u5185\u5BB9...");
       const convertedContent = _FeishuApiClient.convertObsidianImageSyntax(markdownContent);
       onProgress == null ? void 0 : onProgress("\u6B63\u5728\u4E0A\u4F20\u6587\u4EF6...");
-      const fileContent = btoa(unescape(encodeURIComponent(convertedContent)));
+      const fileContent = _FeishuApiClient.encodeBase64Utf8(convertedContent);
       const fileToken = await this.uploadFile(fileName, fileContent, documentId || "");
       onProgress == null ? void 0 : onProgress("\u4E0A\u4F20\u5B8C\u6210\uFF01");
       const fileUrl = `https://open.feishu.cn/open-apis/drive/v1/files/${fileToken}`;
@@ -1253,13 +1303,13 @@ var _FeishuApiClient = class {
    * @param preProcessedImageInfos 预处理的图片信息（按正确顺序）
    */
   async uploadDocumentWithImageInfos(fileName, markdownContent, documentId, onProgress, preProcessedImageInfos) {
-    var _a, _b, _c;
+    var _a, _b;
     let mdFileToken = null;
     try {
       onProgress == null ? void 0 : onProgress("\u6B63\u5728\u5904\u7406\u6587\u6863\u5185\u5BB9...");
       const convertedContent = _FeishuApiClient.convertObsidianImageSyntax(markdownContent);
       onProgress == null ? void 0 : onProgress("\u6B63\u5728\u4E0A\u4F20\u6587\u4EF6\u5230\u4E91\u7A7A\u95F4...");
-      const fileContent = btoa(unescape(encodeURIComponent(convertedContent)));
+      const fileContent = _FeishuApiClient.encodeBase64Utf8(convertedContent);
       mdFileToken = await this.uploadFile(fileName, fileContent, documentId || "");
       onProgress == null ? void 0 : onProgress("\u6587\u4EF6\u5DF2\u4E0A\u4F20\uFF0C\u6B63\u5728\u521B\u5EFA\u5BFC\u5165\u4EFB\u52A1...");
       const ticket = await this.createImportTask(fileName, mdFileToken, documentId || "");
@@ -1271,7 +1321,9 @@ var _FeishuApiClient = class {
       if (preProcessedImageInfos && preProcessedImageInfos.length > 0) {
         imageInfos = preProcessedImageInfos;
       } else {
-        imageInfos = _FeishuApiClient.extractImageInfoFromMarkdown(markdownContent, (_c = (_b = (_a = this.app) == null ? void 0 : _a.vault) == null ? void 0 : _b.adapter) == null ? void 0 : _c.basePath);
+        const adapter = (_b = (_a = this.app) == null ? void 0 : _a.vault) == null ? void 0 : _b.adapter;
+        const basePath = adapter == null ? void 0 : adapter.basePath;
+        imageInfos = _FeishuApiClient.extractImageInfoFromMarkdown(markdownContent, basePath);
       }
       if (imageInfos.length > 0) {
         onProgress == null ? void 0 : onProgress("\u6B63\u5728\u5904\u7406\u6587\u6863\u4E2D\u7684\u56FE\u7247...");
@@ -1317,13 +1369,13 @@ var _FeishuApiClient = class {
    * @param onProgress 进度回调
    */
   async uploadDocument(fileName, markdownContent, documentId, onProgress) {
-    var _a, _b, _c;
+    var _a, _b;
     let mdFileToken = null;
     try {
       onProgress == null ? void 0 : onProgress("\u6B63\u5728\u5904\u7406\u6587\u6863\u5185\u5BB9...");
       const convertedContent = _FeishuApiClient.convertObsidianImageSyntax(markdownContent);
       onProgress == null ? void 0 : onProgress("\u6B63\u5728\u4E0A\u4F20\u6587\u4EF6\u5230\u4E91\u7A7A\u95F4...");
-      const fileContent = btoa(unescape(encodeURIComponent(convertedContent)));
+      const fileContent = _FeishuApiClient.encodeBase64Utf8(convertedContent);
       mdFileToken = await this.uploadFile(fileName, fileContent, documentId || "");
       onProgress == null ? void 0 : onProgress("\u6587\u4EF6\u5DF2\u4E0A\u4F20\uFF0C\u6B63\u5728\u521B\u5EFA\u5BFC\u5165\u4EFB\u52A1...");
       const ticket = await this.createImportTask(fileName, mdFileToken, documentId || "");
@@ -1331,7 +1383,9 @@ var _FeishuApiClient = class {
       await new Promise((resolve) => setTimeout(resolve, 3e3));
       onProgress == null ? void 0 : onProgress("\u5F00\u59CB\u67E5\u8BE2\u5904\u7406\u72B6\u6001...");
       const result = await this.waitForImportTask(ticket, onProgress);
-      const imageInfos = _FeishuApiClient.extractImageInfoFromMarkdown(markdownContent, (_c = (_b = (_a = this.app) == null ? void 0 : _a.vault) == null ? void 0 : _b.adapter) == null ? void 0 : _c.basePath);
+      const adapter = (_b = (_a = this.app) == null ? void 0 : _a.vault) == null ? void 0 : _b.adapter;
+      const basePath = adapter == null ? void 0 : adapter.basePath;
+      const imageInfos = _FeishuApiClient.extractImageInfoFromMarkdown(markdownContent, basePath);
       if (imageInfos.length > 0) {
         onProgress == null ? void 0 : onProgress("\u6B63\u5728\u5904\u7406\u6587\u6863\u4E2D\u7684\u56FE\u7247...");
         await this.processImagesInDocument(result.token, imageInfos, onProgress);
@@ -1434,11 +1488,12 @@ var _FeishuApiClient = class {
         throw new Error(`\u8F6C\u79FB\u6587\u6863\u6240\u6709\u6743\u5931\u8D25: [${result.code}] ${result.msg}`);
       }
     } catch (error) {
+      const errorMeta = getErrorMeta(error);
       this.logError("[\u98DE\u4E66API] \u274C \u6240\u6709\u6743\u8F6C\u79FB\u5F02\u5E38:", error, {
-        status: error.status,
-        statusText: error.statusText,
-        response: error.response,
-        json: error.json
+        status: errorMeta.status,
+        statusText: errorMeta.statusText,
+        response: errorMeta.response,
+        json: errorMeta.json
       });
       throw error;
     }
@@ -1476,11 +1531,12 @@ var _FeishuApiClient = class {
       await this.executePermissionRequest(publicUrl, token, requestBody, "\u6743\u9650\u8BBE\u7F6E");
       return true;
     } catch (error) {
+      const errorMeta = getErrorMeta(error);
       this.logError("[\u98DE\u4E66API] \u274C \u6743\u9650\u8BBE\u7F6E\u5931\u8D25:", error, {
-        status: error.status,
-        statusText: error.statusText,
-        response: error.response,
-        json: error.json
+        status: errorMeta.status,
+        statusText: errorMeta.statusText,
+        response: errorMeta.response,
+        json: errorMeta.json
       });
       throw error;
     }
@@ -1513,11 +1569,12 @@ var _FeishuApiClient = class {
       await this.executePermissionRequest(publicUrl, token, requestBody, "\u6743\u9650\u8BBE\u7F6E\uFF08\u65E0\u6240\u6709\u6743\u8F6C\u79FB\uFF09");
       return true;
     } catch (error) {
+      const errorMeta = getErrorMeta(error);
       this.logError("[\u98DE\u4E66API] \u274C \u6743\u9650\u8BBE\u7F6E\u5931\u8D25\uFF08\u65E0\u6240\u6709\u6743\u8F6C\u79FB\uFF09:", error, {
-        status: error.status,
-        statusText: error.statusText,
-        response: error.response,
-        json: error.json
+        status: errorMeta.status,
+        statusText: errorMeta.statusText,
+        response: errorMeta.response,
+        json: errorMeta.json
       });
       throw error;
     }
@@ -1556,25 +1613,26 @@ var _FeishuApiClient = class {
           throw new Error(`${stepName}\u5931\u8D25: [${result.code}] ${result.msg}`);
         }
       } catch (error) {
+        const errorMeta = getErrorMeta(error);
         this.logError(`[\u98DE\u4E66API] \u274C ${stepName}\u7B2C${retryCount + 1}\u6B21\u8BF7\u6C42\u5F02\u5E38:`, error, {
-          status: error.status,
-          statusText: error.statusText,
-          response: error.response,
-          json: error.json,
+          status: errorMeta.status,
+          statusText: errorMeta.statusText,
+          response: errorMeta.response,
+          json: errorMeta.json,
           retryCount,
           maxRetries
         });
-        if (error.status === 500 && retryCount < maxRetries) {
+        if (errorMeta.status === 500 && retryCount < maxRetries) {
           retryCount++;
           console.warn(`[\u98DE\u4E66API] \u26A0\uFE0F ${stepName}\u9047\u5230500\u9519\u8BEF\uFF0C${retryDelay / 1e3}\u79D2\u540E\u8FDB\u884C\u7B2C${retryCount + 1}\u6B21\u91CD\u8BD5...`);
           await new Promise((resolve) => setTimeout(resolve, retryDelay));
           continue;
         } else {
           this.logError(`[\u98DE\u4E66API] \u274C ${stepName}\u6700\u7EC8\u5931\u8D25:`, error, {
-            status: error.status,
-            statusText: error.statusText,
-            response: error.response,
-            json: error.json,
+            status: errorMeta.status,
+            statusText: errorMeta.statusText,
+            response: errorMeta.response,
+            json: errorMeta.json,
             retryCount,
             maxRetries
           });
@@ -1622,11 +1680,12 @@ var _FeishuApiClient = class {
         throw new Error(`\u5220\u9664\u6587\u4EF6\u5931\u8D25: [${result.code}] ${result.msg}`);
       }
     } catch (error) {
+      const errorMeta = getErrorMeta(error);
       this.logError("[\u98DE\u4E66API] \u274C \u5220\u9664\u6587\u4EF6\u5F02\u5E38:", error, {
-        status: error.status,
-        statusText: error.statusText,
-        response: error.response,
-        json: error.json
+        status: errorMeta.status,
+        statusText: errorMeta.statusText,
+        response: errorMeta.response,
+        json: errorMeta.json
       });
       throw error;
     }
@@ -1686,11 +1745,11 @@ var _FeishuApiClient = class {
       while (hasMore) {
         const url = `${this.baseUrl}/docx/v1/documents/${documentId}/blocks`;
         const params = {
-          page_size: 500,
+          page_size: "500",
           user_id_type: "user_id"
         };
         if (pageToken) {
-          params.page_token = pageToken;
+          params["page_token"] = pageToken;
         }
         const requestParam = {
           url: url + "?" + new URLSearchParams(params).toString(),
@@ -2106,6 +2165,7 @@ function createFeishuClient(appId, appSecret, app, apiCallCountCallback) {
 }
 
 // crypto-utils.ts
+var import_obsidian2 = require("obsidian");
 var _CryptoUtils = class {
   static setDebugEnabled(enabled) {
     this.debugEnabled = enabled;
@@ -2140,21 +2200,17 @@ var _CryptoUtils = class {
    * 使用设备的硬件和系统信息生成唯一且稳定的密钥
    */
   static async generateDeviceKey() {
+    const platformLabel = import_obsidian2.Platform.isMacOS ? "macos" : import_obsidian2.Platform.isWin ? "windows" : import_obsidian2.Platform.isLinux ? "linux" : import_obsidian2.Platform.isMobile ? "mobile" : "unknown";
     const deviceInfo = [
-      navigator.userAgent,
-      // 用户代理
-      navigator.platform,
-      // 平台信息
+      `platform:${platformLabel}`,
+      `desktop:${import_obsidian2.Platform.isDesktop}`,
+      `mobile:${import_obsidian2.Platform.isMobile}`,
+      `app:${import_obsidian2.Platform.isDesktopApp ? "desktop" : import_obsidian2.Platform.isMobileApp ? "mobile" : "web"}`,
       navigator.language,
-      // 语言设置
       screen.width + "x" + screen.height,
-      // 屏幕分辨率
       new Date().getTimezoneOffset().toString(),
-      // 时区偏移
       window.location.hostname || "obsidian",
-      // 主机名
       "feishu-plugin-v1"
-      // 插件标识
     ].join("|");
     const encoder = new TextEncoder();
     const data = encoder.encode(deviceInfo);
@@ -2176,7 +2232,7 @@ var _CryptoUtils = class {
     if (!plaintext || plaintext.trim() === "") {
       return plaintext;
     }
-    if (this.lastEncryptedData === plaintext && this.lastEncryptedResult) {
+    if (this.lastEncryptedData === plaintext && typeof this.lastEncryptedResult === "string") {
       return this.lastEncryptedResult;
     }
     try {
@@ -2287,10 +2343,11 @@ var _CryptoUtils = class {
   static async encryptSensitiveSettings(settings) {
     const sensitiveData = this.extractSensitiveData(settings);
     const sensitiveDataString = JSON.stringify(sensitiveData);
-    if (this.lastEncryptedData === sensitiveDataString && this.lastEncryptedResult) {
-      return { ...settings, ...this.lastEncryptedResult };
-    }
     const encrypted = { ...settings };
+    const cachedEncryptedFields = this.lastEncryptedResult;
+    if (this.lastEncryptedData === sensitiveDataString && cachedEncryptedFields && typeof cachedEncryptedFields === "object" && !Array.isArray(cachedEncryptedFields)) {
+      return Object.assign(encrypted, cachedEncryptedFields);
+    }
     const encryptedFields = {};
     for (const field of this.SENSITIVE_FIELDS) {
       if (encrypted[field] && typeof encrypted[field] === "string") {
@@ -2507,8 +2564,8 @@ var _CalloutConverter = class {
    */
   createFeishuCalloutDescendants(callout) {
     const backgroundColorNumber = this.getBackgroundColorNumber(callout.type);
-    const calloutBlockId = `callout_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-    const textBlockId = `text_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    const calloutBlockId = `callout_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`;
+    const textBlockId = `text_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`;
     return {
       childrenIds: [calloutBlockId],
       descendants: [
@@ -2672,13 +2729,23 @@ var _CalloutConverter = class {
     }
     for (const block of blocks) {
       const feishuBlock = {
-        block_id: block.block_id,
-        block_type: block.block_type,
-        parent_id: block.parent_id,
-        text: block.text,
-        quote: block.quote,
-        callout: block.callout
+        block_type: block.block_type
       };
+      if (block.block_id !== void 0) {
+        feishuBlock.block_id = block.block_id;
+      }
+      if (block.parent_id !== void 0) {
+        feishuBlock.parent_id = block.parent_id;
+      }
+      if (block.text !== void 0) {
+        feishuBlock.text = block.text;
+      }
+      if (block.quote !== void 0) {
+        feishuBlock.quote = block.quote;
+      }
+      if (block.callout !== void 0) {
+        feishuBlock.callout = block.callout;
+      }
       if (block.parent_id && parentChildrenMap.has(block.parent_id)) {
         const siblings = parentChildrenMap.get(block.parent_id);
         const index = siblings.findIndex((sibling) => sibling.block_id === block.block_id);
@@ -3029,8 +3096,8 @@ var _YamlProcessor = class {
    */
   createFeishuYamlDescendants(yamlInfo) {
     const content = this.formatYamlContent(yamlInfo);
-    const calloutBlockId = `yaml_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-    const textBlockId = `text_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    const calloutBlockId = `yaml_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`;
+    const textBlockId = `text_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`;
     return {
       childrenIds: [calloutBlockId],
       descendants: [
@@ -3195,14 +3262,14 @@ var _YamlProcessor = class {
         return false;
       }
       const descendants = this.createFeishuYamlDescendants(yamlInfo);
-      const response = await this.feishuClient.createDocumentDescendants(
+      await this.feishuClient.createDocumentDescendants(
         documentId,
         rootBlock.block_id,
         insertIndex,
         descendants.childrenIds,
         descendants.descendants
       );
-      return response && response.code === 0;
+      return true;
     } catch (error) {
       this.logError("[YAML\u5904\u7406\u5668] \u63D2\u5165YAML\u5757\u5931\u8D25:", error, { documentId, insertIndex });
       return false;
@@ -3217,7 +3284,6 @@ YamlProcessor.YAML_REGEX = /^---\s*\n([\s\S]*?)\n---\s*\n/;
 // link-processor.ts
 var _LinkProcessor = class {
   constructor(app, feishuClient, plugin) {
-    // 主插件实例，用于调用uploadFile方法
     this.uploadedDocuments = /* @__PURE__ */ new Map();
     // 缓存已上传的文档
     this.processingDocuments = /* @__PURE__ */ new Set();
@@ -3459,7 +3525,7 @@ var LinkProcessor = _LinkProcessor;
 LinkProcessor.debugEnabled = false;
 
 // mermaid-converter.ts
-var import_obsidian2 = require("obsidian");
+var import_obsidian3 = require("obsidian");
 var MermaidConverter = class {
   static setDebugEnabled(enabled) {
     this.debugEnabled = enabled;
@@ -3561,11 +3627,12 @@ var MermaidConverter = class {
         tempContainer = document.createElement("div");
         tempContainer.classList.add("obshare-mermaid-temp-container");
         document.body.appendChild(tempContainer);
-        component = new import_obsidian2.Component();
+        component = new import_obsidian3.Component();
         const markdownContent = `\`\`\`mermaid
 ${mermaidContent}
 \`\`\``;
-        await import_obsidian2.MarkdownRenderer.renderMarkdown(
+        await import_obsidian3.MarkdownRenderer.render(
+          app,
           markdownContent,
           tempContainer,
           "",
@@ -3611,7 +3678,7 @@ ${mermaidContent}
         });
       } catch (error) {
         this.logError("[Mermaid\u8F6C\u6362] \u8F6C\u6362\u5931\u8D25:", error);
-        reject(error);
+        reject(error instanceof Error ? error : new Error(String(error)));
       } finally {
         if (component) {
           component.unload();
@@ -3717,7 +3784,7 @@ ${mermaidContent}
             this.debug(`[SVG\u8F6CPNG] \u8F6C\u6362\u5B8C\u6210\uFF0C\u6700\u7EC8\u5C3A\u5BF8: ${targetWidth}x${targetHeight}`);
             resolve(base64Data);
           } catch (error) {
-            reject(error);
+            reject(error instanceof Error ? error : new Error(String(error)));
           }
         };
         img.onerror = () => {
@@ -3726,7 +3793,7 @@ ${mermaidContent}
         img.src = svgDataUrl;
       } catch (error) {
         this.logError("[SVG\u8F6CPNG] \u8F6C\u6362\u5931\u8D25:", error);
-        reject(error);
+        reject(error instanceof Error ? error : new Error(String(error)));
       }
     });
   }
@@ -3785,1484 +3852,6 @@ MermaidConverter.RENDER_TIMEOUT = 1e4;
 // 10秒超时
 MermaidConverter.debugEnabled = false;
 
-// smart-update.ts
-var import_obsidian3 = require("obsidian");
-var _SmartUpdateManager = class {
-  constructor(feishuClient) {
-    /**
-     * 不支持创建的块类型列表（根据飞书API文档）
-     */
-    this.UNSUPPORTED_BLOCK_TYPES = /* @__PURE__ */ new Set([
-      "ai_template",
-      // AI 模板块 - 仅支持查询
-      "source_synced",
-      // 源同步块 - 仅支持查询
-      "reference_synced",
-      // 引用同步块 - 仅支持查询
-      "mindnote",
-      // 思维笔记块 - 不支持创建
-      "undefined",
-      // 未定义块 - 无效操作
-      "page",
-      // 页面块 - 文档创建时自动生成
-      "view",
-      // 视图块 - 添加文件块时自动生成
-      "diagram"
-      // 流程图 & UML 图 - 不支持创建
-    ]);
-    /**
-     * 父子块类型限制映射（根据飞书API文档）
-     */
-    this.PARENT_CHILD_RESTRICTIONS = /* @__PURE__ */ new Map([
-      // 高亮块（Callout）限制
-      ["callout", /* @__PURE__ */ new Set(["text", "heading1", "heading2", "heading3", "heading4", "heading5", "heading6", "bullet", "ordered", "quote", "code", "equation", "todo"])],
-      // 分栏列（GridColumn）限制 - 不允许分栏、多维表格、OKR块
-      ["grid_column", /* @__PURE__ */ new Set(["text", "heading1", "heading2", "heading3", "heading4", "heading5", "heading6", "bullet", "ordered", "quote", "code", "equation", "todo", "image", "table", "callout"])],
-      // 引用块（Quote）限制
-      ["quote", /* @__PURE__ */ new Set(["text", "heading1", "heading2", "heading3", "heading4", "heading5", "heading6", "bullet", "ordered", "code", "equation", "todo"])],
-      // 代码块（Code）通常不包含子块
-      ["code", /* @__PURE__ */ new Set()],
-      // 表格块（Table）只能包含表格行
-      ["table", /* @__PURE__ */ new Set(["table_row"])],
-      // 表格行（TableRow）只能包含表格单元格
-      ["table_row", /* @__PURE__ */ new Set(["table_cell"])],
-      // 表格单元格（TableCell）可以包含基础文本元素
-      ["table_cell", /* @__PURE__ */ new Set(["text", "equation", "mention_doc", "mention_user"])]
-    ]);
-    this.feishuClient = feishuClient;
-  }
-  static setDebugEnabled(enabled) {
-    this.debugEnabled = enabled;
-  }
-  debug(...args) {
-    if (_SmartUpdateManager.debugEnabled) {
-      console.debug(...args);
-    }
-  }
-  logError(summary, error, details) {
-    const errorMessage = error instanceof Error ? error.message : String(error);
-    console.error(summary, errorMessage);
-    this.debug(`${summary} \u8BE6\u60C5:`, {
-      ...details,
-      error,
-      errorMessage,
-      errorStack: error instanceof Error ? error.stack : void 0
-    });
-  }
-  /**
-   * 检查是否存在同名文档
-   * @param title 文档标题
-   * @param uploadHistory 上传历史记录
-   * @returns 如果存在返回文档信息，否则返回null
-   */
-  findExistingDocument(title, uploadHistory) {
-    const existingDoc = uploadHistory.find(
-      (item) => item.title === title && !item.isReferencedDocument
-    );
-    if (existingDoc) {
-      return {
-        docToken: existingDoc.docToken,
-        url: existingDoc.url
-      };
-    }
-    return null;
-  }
-  /**
-   * 获取文档根块ID
-   * @param documentId 文档ID
-   * @returns 根块ID
-   */
-  async getDocumentRootBlockId(documentId) {
-    try {
-      this.debug("[\u667A\u80FD\u66F4\u65B0] \u6839\u636E\u98DE\u4E66\u5B98\u65B9\u6587\u6863\uFF0C\u9875\u9762\u5757\u7684block_id\u4E0Edocument_id\u76F8\u540C:", documentId);
-      return documentId;
-    } catch (error) {
-      this.logError("[\u667A\u80FD\u66F4\u65B0] \u83B7\u53D6\u6839\u5757ID\u5931\u8D25:", error);
-      throw new Error(`\u83B7\u53D6\u6587\u6863\u6839\u5757ID\u5931\u8D25: ${error instanceof Error ? error.message : String(error)}`);
-    }
-  }
-  /**
-   * 删除根块下的所有子块
-   * @param documentId 文档ID
-   * @param rootBlockId 根块ID
-   */
-  async deleteAllChildBlocks(documentId, rootBlockId) {
-    try {
-      this.debug("\u6B63\u5728\u5220\u9664\u6240\u6709\u5B50\u5757...");
-      const blocks = await this.feishuClient.getDocumentBlocksDetailed(documentId);
-      const childBlocks = blocks.filter((block) => block.parent_id === rootBlockId);
-      if (childBlocks.length === 0) {
-        this.debug("\u6CA1\u6709\u627E\u5230\u5B50\u5757\uFF0C\u8DF3\u8FC7\u5220\u9664\u6B65\u9AA4");
-        return;
-      }
-      this.debug(`\u627E\u5230 ${childBlocks.length} \u4E2A\u5B50\u5757\uFF0C\u5F00\u59CB\u6279\u91CF\u5220\u9664`);
-      await this.feishuClient.batchDeleteDocumentBlocks(
-        documentId,
-        rootBlockId,
-        0,
-        // start_index (包含)
-        childBlocks.length
-        // end_index (不包含)
-      );
-      this.debug("\u6240\u6709\u5B50\u5757\u6279\u91CF\u5220\u9664\u5B8C\u6210");
-    } catch (error) {
-      this.logError("[\u667A\u80FD\u66F4\u65B0] \u5220\u9664\u5B50\u5757\u5931\u8D25:", error, { documentId, rootBlockId });
-      throw new Error(`\u5220\u9664\u6587\u6863\u5B50\u5757\u5931\u8D25: ${error instanceof Error ? error.message : String(error)}`);
-    }
-  }
-  /**
-   * 重新导入内容到文档
-   * @param documentId 文档ID
-   * @param rootBlockId 根块ID
-   * @param markdownContent Markdown内容
-   */
-  async reimportContent(documentId, rootBlockId, markdownContent, orderedImageInfos, yamlInfo) {
-    var _a, _b, _c;
-    try {
-      this.debug("[\u667A\u80FD\u66F4\u65B0] \u5F00\u59CB\u66F4\u65B0\u6587\u6863\u5185\u5BB9...");
-      this.debug("[\u667A\u80FD\u66F4\u65B0] \u9A8C\u8BC1\u6587\u6863\u8BBF\u95EE\u6743\u9650...");
-      const documentValidation = await this.validateDocumentAccess(documentId);
-      if (!documentValidation.isValid) {
-        throw new Error(`\u6587\u6863\u8BBF\u95EE\u5931\u8D25: ${documentValidation.errors.join(", ")}`);
-      }
-      this.debug("[\u667A\u80FD\u66F4\u65B0] \u6587\u6863\u9A8C\u8BC1\u901A\u8FC7\uFF0C\u5F00\u59CB\u66F4\u65B0\u5185\u5BB9...");
-      this.debug("[\u667A\u80FD\u66F4\u65B0] \u6B63\u5728\u9884\u5904\u7406Markdown\u5185\u5BB9...");
-      const convertedContent = FeishuApiClient.convertObsidianImageSyntax(markdownContent);
-      const processedContent = this.preprocessMarkdownForBlockSeparation(convertedContent);
-      this.debug("[\u667A\u80FD\u66F4\u65B0] Markdown\u9884\u5904\u7406\u5B8C\u6210");
-      let imageInfos = [];
-      if (orderedImageInfos && orderedImageInfos.length > 0) {
-        imageInfos = orderedImageInfos;
-        this.debug(`[\u667A\u80FD\u66F4\u65B0] \u4F7F\u7528\u9884\u5904\u7406\u7684\u56FE\u7247\u4FE1\u606F\uFF0C\u5171 ${imageInfos.length} \u5F20\u56FE\u7247`);
-      } else {
-        imageInfos = FeishuApiClient.extractImageInfoFromMarkdown(markdownContent, (_c = (_b = (_a = this.feishuClient.app) == null ? void 0 : _a.vault) == null ? void 0 : _b.adapter) == null ? void 0 : _c.basePath);
-        this.debug(`[\u667A\u80FD\u66F4\u65B0] \u4ECEMarkdown\u63D0\u53D6\u56FE\u7247\u4FE1\u606F\uFF0C\u5171 ${imageInfos.length} \u5F20\u56FE\u7247`);
-      }
-      const conversionResult = await this.feishuClient.convertMarkdownToBlocks(processedContent);
-      if (!(conversionResult == null ? void 0 : conversionResult.blocks) || conversionResult.blocks.length === 0) {
-        throw new Error("Markdown\u8F6C\u6362\u5931\u8D25\u6216\u6CA1\u6709\u751F\u6210\u5757");
-      }
-      this.debug(`[\u667A\u80FD\u66F4\u65B0] Markdown\u8F6C\u6362\u6210\u529F\uFF0C\u751F\u6210 ${conversionResult.blocks.length} \u4E2A\u5757`);
-      this.debug("[\u667A\u80FD\u66F4\u65B0] \u8F6C\u6362API\u8FD4\u56DE\u7684\u539F\u59CB\u5757\u987A\u5E8F:");
-      conversionResult.blocks.forEach((block, index) => {
-        this.debug(`  [${index}] \u7C7B\u578B: ${block.block_type}, \u5185\u5BB9\u9884\u89C8: ${this.getBlockContentPreview(block)}`);
-      });
-      const orderedBlocks = this.validateAndFixBlockOrder(conversionResult.blocks, processedContent);
-      const relationFixedBlocks = this.validateAndFixParentChildRelations(orderedBlocks);
-      const processedBlocks = this.processBlocksForInsertion(relationFixedBlocks);
-      let hierarchyErrors = [];
-      for (const block of processedBlocks) {
-        const validation = this.validateBlockHierarchy(block);
-        hierarchyErrors.push(...validation.errors);
-      }
-      if (hierarchyErrors.length > 0) {
-        console.warn("[\u667A\u80FD\u66F4\u65B0] \u5757\u5C42\u7EA7\u9A8C\u8BC1\u51FA\u73B0\u95EE\u9898:", hierarchyErrors);
-      }
-      const { tableBlocks, nonTableBlocks } = this.separateTableBlocks(processedBlocks);
-      if (nonTableBlocks.length > 0) {
-        this.debug(`[\u667A\u80FD\u66F4\u65B0] \u5F00\u59CB\u521B\u5EFA ${nonTableBlocks.length} \u4E2A\u975E\u8868\u683C\u5757...`);
-        await this.createBlocksInBatches(documentId, rootBlockId, nonTableBlocks);
-        this.debug("[\u667A\u80FD\u66F4\u65B0] \u975E\u8868\u683C\u5757\u521B\u5EFA\u5B8C\u6210");
-      }
-      if (tableBlocks.length > 0) {
-        this.debug(`[\u667A\u80FD\u66F4\u65B0] \u5F00\u59CB\u5355\u72EC\u5904\u7406 ${tableBlocks.length} \u4E2A\u8868\u683C\u5757...`);
-        await this.processTablesInDocument(documentId, rootBlockId, tableBlocks, nonTableBlocks.length);
-        this.debug("[\u667A\u80FD\u66F4\u65B0] \u8868\u683C\u5904\u7406\u5B8C\u6210");
-      }
-      if (imageInfos.length > 0) {
-        this.debug(`[\u667A\u80FD\u66F4\u65B0] \u5F00\u59CB\u5904\u7406 ${imageInfos.length} \u5F20\u56FE\u7247...`);
-        await this.feishuClient.processImagesInDocument(documentId, imageInfos, (status) => {
-          this.debug(`[\u667A\u80FD\u66F4\u65B0] \u56FE\u7247\u5904\u7406: ${status}`);
-        });
-        this.debug("[\u667A\u80FD\u66F4\u65B0] \u56FE\u7247\u5904\u7406\u5B8C\u6210");
-      }
-      this.debug("[\u667A\u80FD\u66F4\u65B0] \u5F00\u59CB\u5904\u7406Callout\u8F6C\u6362...");
-      await this.processCalloutConversion(documentId);
-      this.debug("[\u667A\u80FD\u66F4\u65B0] Callout\u8F6C\u6362\u5B8C\u6210");
-      if (yamlInfo) {
-        this.debug("[\u667A\u80FD\u66F4\u65B0] \u5F00\u59CB\u5904\u7406\u6587\u6863\u4FE1\u606F\u5757...");
-        await this.processYamlInsertion(documentId, yamlInfo);
-        this.debug("[\u667A\u80FD\u66F4\u65B0] \u6587\u6863\u4FE1\u606F\u5757\u5904\u7406\u5B8C\u6210");
-      }
-      this.debug("[\u667A\u80FD\u66F4\u65B0] \u5185\u5BB9\u91CD\u65B0\u5BFC\u5165\u5B8C\u6210");
-    } catch (error) {
-      this.logError("[\u667A\u80FD\u66F4\u65B0] \u91CD\u65B0\u5BFC\u5165\u5185\u5BB9\u5931\u8D25:", error, { documentId, rootBlockId });
-      throw new Error(`\u91CD\u65B0\u5BFC\u5165\u5185\u5BB9\u5931\u8D25: ${error instanceof Error ? error.message : String(error)}`);
-    }
-  }
-  /**
-   * 分批创建块
-   * @param documentId 文档ID
-   * @param rootBlockId 根块ID
-   * @param blocks 要创建的块数组
-   */
-  async createBlocksInBatches(documentId, rootBlockId, blocks) {
-    const BATCH_SIZE = 50;
-    const totalBlocks = blocks.length;
-    let currentIndex = 0;
-    this.debug(`[\u667A\u80FD\u66F4\u65B0] \u5F00\u59CB\u5206\u6279\u521B\u5EFA ${totalBlocks} \u4E2A\u5757\uFF0C\u6BCF\u6279 ${BATCH_SIZE} \u4E2A`);
-    this.debug("[\u667A\u80FD\u66F4\u65B0] \u5373\u5C06\u63D2\u5165\u7684\u5757\u987A\u5E8F:");
-    blocks.forEach((block, index) => {
-      this.debug(`  [${index}] \u7C7B\u578B: ${block.block_type}, \u5185\u5BB9: ${this.getBlockContentPreview(block)}`);
-    });
-    const { tableBlocks, nonTableBlocks } = this.separateTableBlocks(blocks);
-    if (nonTableBlocks.length > 0) {
-      this.debug(`[\u667A\u80FD\u66F4\u65B0] \u5148\u521B\u5EFA ${nonTableBlocks.length} \u4E2A\u975E\u8868\u683C\u5757`);
-      await this.createNonTableBlocksInBatches(documentId, rootBlockId, nonTableBlocks, currentIndex);
-      currentIndex += nonTableBlocks.length;
-    }
-    if (tableBlocks.length > 0) {
-      this.debug(`[\u667A\u80FD\u66F4\u65B0] \u5F00\u59CB\u5206\u6B65\u521B\u5EFA ${tableBlocks.length} \u4E2A\u8868\u683C\u5757`);
-      await this.createTableBlocksStepByStep(documentId, rootBlockId, tableBlocks, currentIndex);
-    }
-    this.debug(`[\u667A\u80FD\u66F4\u65B0] \u6240\u6709 ${totalBlocks} \u4E2A\u5757\u521B\u5EFA\u5B8C\u6210`);
-  }
-  /**
-   * 分离表格块和非表格块
-   * @param blocks 所有块
-   * @returns 分离后的块
-   */
-  separateTableBlocks(blocks) {
-    const tableBlocks = [];
-    const nonTableBlocks = [];
-    for (const block of blocks) {
-      if (block.block_type === "table" || block.block_type === 31) {
-        tableBlocks.push(block);
-      } else {
-        nonTableBlocks.push(block);
-      }
-    }
-    return { tableBlocks, nonTableBlocks };
-  }
-  /**
-   * 单独处理表格块（类似图片处理的逻辑）
-   * @param documentId 文档ID
-   * @param rootBlockId 根块ID
-   * @param tableBlocks 表格块数组
-   * @param startIndex 起始索引（非表格块的数量）
-   */
-  async processTablesInDocument(documentId, rootBlockId, tableBlocks, startIndex) {
-    if (tableBlocks.length === 0) {
-      this.debug("[\u667A\u80FD\u66F4\u65B0] \u6CA1\u6709\u8868\u683C\u9700\u8981\u5904\u7406");
-      return;
-    }
-    this.debug(`[\u667A\u80FD\u66F4\u65B0] \u5F00\u59CB\u5355\u72EC\u5904\u7406 ${tableBlocks.length} \u4E2A\u8868\u683C...`);
-    let currentIndex = startIndex;
-    let successCount = 0;
-    let failureCount = 0;
-    for (let i = 0; i < tableBlocks.length; i++) {
-      const tableBlock = tableBlocks[i];
-      try {
-        this.debug(`[\u667A\u80FD\u66F4\u65B0] \u5904\u7406\u7B2C ${i + 1}/${tableBlocks.length} \u4E2A\u8868\u683C\uFF0C\u7D22\u5F15\u4F4D\u7F6E: ${currentIndex}`);
-        await this.createSingleTableBlock(documentId, rootBlockId, tableBlock, currentIndex);
-        successCount++;
-        currentIndex++;
-        this.debug(`[\u667A\u80FD\u66F4\u65B0] \u8868\u683C ${i + 1} \u521B\u5EFA\u6210\u529F`);
-        if (i < tableBlocks.length - 1) {
-          await new Promise((resolve) => setTimeout(resolve, 1500));
-        }
-      } catch (error) {
-        failureCount++;
-        this.logError(`[\u667A\u80FD\u66F4\u65B0] \u8868\u683C ${i + 1} \u521B\u5EFA\u5931\u8D25:`, error, {
-          documentId,
-          rootBlockId,
-          index: currentIndex
-        });
-        try {
-          const fallbackBlock = {
-            block_type: "text",
-            text: {
-              elements: [{
-                text_run: {
-                  content: `[\u8868\u683C\u521B\u5EFA\u5931\u8D25] \u539F\u8868\u683C\u5185\u5BB9\u65E0\u6CD5\u6B63\u786E\u663E\u793A\uFF0C\u8BF7\u624B\u52A8\u91CD\u65B0\u521B\u5EFA\u8868\u683C\u3002\u9519\u8BEF\u4FE1\u606F: ${error instanceof Error ? error.message : String(error)}`
-                }
-              }]
-            }
-          };
-          await this.feishuClient.createDocumentBlocks(
-            documentId,
-            rootBlockId,
-            currentIndex,
-            [fallbackBlock]
-          );
-          currentIndex++;
-          this.debug(`[\u667A\u80FD\u66F4\u65B0] \u5DF2\u521B\u5EFA\u9519\u8BEF\u63D0\u793A\u6587\u672C\u5757\u66FF\u4EE3\u5931\u8D25\u7684\u8868\u683C`);
-        } catch (fallbackError) {
-          this.logError(`[\u667A\u80FD\u66F4\u65B0] \u521B\u5EFA\u9519\u8BEF\u63D0\u793A\u6587\u672C\u5757\u4E5F\u5931\u8D25:`, fallbackError, {
-            documentId,
-            rootBlockId,
-            index: currentIndex
-          });
-        }
-      }
-    }
-    this.debug(`[\u667A\u80FD\u66F4\u65B0] \u8868\u683C\u5904\u7406\u5B8C\u6210: \u6210\u529F ${successCount} \u4E2A\uFF0C\u5931\u8D25 ${failureCount} \u4E2A`);
-    if (failureCount > 0) {
-      console.warn(`[\u667A\u80FD\u66F4\u65B0] \u6709 ${failureCount} \u4E2A\u8868\u683C\u521B\u5EFA\u5931\u8D25\uFF0C\u5DF2\u7528\u6587\u672C\u5757\u66FF\u4EE3`);
-    }
-  }
-  /**
-   * 创建单个表格块（简化版本）
-   * @param documentId 文档ID
-   * @param rootBlockId 根块ID
-   * @param tableBlock 表格块
-   * @param index 插入位置索引
-   */
-  async createSingleTableBlock(documentId, rootBlockId, tableBlock, index) {
-    var _a, _b;
-    try {
-      this.debug(`[\u667A\u80FD\u66F4\u65B0] \u5C1D\u8BD5\u76F4\u63A5\u521B\u5EFA\u5B8C\u6574\u8868\u683C...`);
-      const simplifiedTableBlock = this.simplifyTableBlock(tableBlock);
-      const result = await this.feishuClient.createDocumentBlocks(
-        documentId,
-        rootBlockId,
-        index,
-        [simplifiedTableBlock]
-      );
-      if ((_b = (_a = result == null ? void 0 : result.children) == null ? void 0 : _a[0]) == null ? void 0 : _b.block_id) {
-        this.debug(`[\u667A\u80FD\u66F4\u65B0] \u8868\u683C\u76F4\u63A5\u521B\u5EFA\u6210\u529F\uFF0CID: ${result.children[0].block_id}`);
-        return;
-      }
-      throw new Error("\u76F4\u63A5\u521B\u5EFA\u8868\u683C\u5931\u8D25\uFF0C\u8FD4\u56DE\u7ED3\u679C\u65E0\u6548");
-    } catch (directError) {
-      console.warn(`[\u667A\u80FD\u66F4\u65B0] \u76F4\u63A5\u521B\u5EFA\u8868\u683C\u5931\u8D25\uFF0C\u5C1D\u8BD5\u5206\u6B65\u521B\u5EFA:`, directError);
-      await this.createTableBlockStepByStep(documentId, rootBlockId, tableBlock, index);
-    }
-  }
-  /**
-   * 简化表格块结构
-   * @param tableBlock 原始表格块
-   * @returns 简化后的表格块
-   */
-  simplifyTableBlock(tableBlock) {
-    var _a, _b, _c, _d;
-    const simplified = {
-      block_type: tableBlock.block_type,
-      table: {
-        property: {
-          row_size: ((_b = (_a = tableBlock.table) == null ? void 0 : _a.property) == null ? void 0 : _b.row_size) || 1,
-          column_size: ((_d = (_c = tableBlock.table) == null ? void 0 : _c.property) == null ? void 0 : _d.column_size) || 1
-        }
-      }
-    };
-    if (tableBlock.children && tableBlock.children.length > 0) {
-      simplified.children = this.simplifyTableChildren(tableBlock.children);
-    }
-    return simplified;
-  }
-  /**
-   * 简化表格子块结构
-   * @param children 原始子块数组
-   * @returns 简化后的子块数组
-   */
-  simplifyTableChildren(children) {
-    return children.map((child) => {
-      const simplified = {
-        block_type: child.block_type
-      };
-      if (child.block_type === "table_row") {
-        simplified.table_row = {};
-      } else if (child.block_type === "table_cell") {
-        simplified.table_cell = {};
-      }
-      if (child.children && child.children.length > 0) {
-        simplified.children = this.simplifyTableChildren(child.children);
-      }
-      return simplified;
-    });
-  }
-  /**
-   * 分步创建表格块（备用方案）
-   * @param documentId 文档ID
-   * @param rootBlockId 根块ID
-   * @param tableBlock 表格块
-   * @param index 插入位置索引
-   */
-  async createTableBlockStepByStep(documentId, rootBlockId, tableBlock, index) {
-    var _a, _b;
-    this.debug(`[\u667A\u80FD\u66F4\u65B0] \u5F00\u59CB\u5206\u6B65\u521B\u5EFA\u8868\u683C...`);
-    const emptyTableBlock = this.createEmptyTableBlock(tableBlock);
-    const createResult = await this.feishuClient.createDocumentBlocks(
-      documentId,
-      rootBlockId,
-      index,
-      [emptyTableBlock]
-    );
-    const createdTableBlockId = (_b = (_a = createResult == null ? void 0 : createResult.children) == null ? void 0 : _a[0]) == null ? void 0 : _b.block_id;
-    if (!createdTableBlockId) {
-      throw new Error("\u65E0\u6CD5\u83B7\u53D6\u521B\u5EFA\u7684\u8868\u683C\u5757ID");
-    }
-    this.debug(`[\u667A\u80FD\u66F4\u65B0] \u7A7A\u8868\u683C\u6846\u67B6\u521B\u5EFA\u6210\u529F\uFF0CID: ${createdTableBlockId}`);
-    if (tableBlock.children && tableBlock.children.length > 0) {
-      this.debug(`[\u667A\u80FD\u66F4\u65B0] \u5F00\u59CB\u6DFB\u52A0\u8868\u683C\u5185\u5BB9...`);
-      await this.addTableRowsAndCells(documentId, createdTableBlockId, tableBlock.children);
-      this.debug(`[\u667A\u80FD\u66F4\u65B0] \u8868\u683C\u5185\u5BB9\u6DFB\u52A0\u5B8C\u6210`);
-    }
-  }
-  /**
-   * 分批创建非表格块
-   * @param documentId 文档ID
-   * @param rootBlockId 根块ID
-   * @param blocks 非表格块数组
-   * @param startIndex 起始索引
-   */
-  async createNonTableBlocksInBatches(documentId, rootBlockId, blocks, startIndex) {
-    const BATCH_SIZE = 50;
-    let currentIndex = startIndex;
-    for (let i = 0; i < blocks.length; i += BATCH_SIZE) {
-      const batch = blocks.slice(i, i + BATCH_SIZE);
-      const batchNumber = Math.floor(i / BATCH_SIZE) + 1;
-      const totalBatches = Math.ceil(blocks.length / BATCH_SIZE);
-      this.debug(`[\u667A\u80FD\u66F4\u65B0] \u6B63\u5728\u521B\u5EFA\u7B2C ${batchNumber}/${totalBatches} \u6279\u975E\u8868\u683C\u5757\uFF0C\u5305\u542B ${batch.length} \u4E2A\u5757`);
-      try {
-        await this.feishuClient.createDocumentBlocks(
-          documentId,
-          rootBlockId,
-          currentIndex,
-          batch
-        );
-        currentIndex += batch.length;
-        this.debug(`[\u667A\u80FD\u66F4\u65B0] \u7B2C ${batchNumber} \u6279\u975E\u8868\u683C\u5757\u521B\u5EFA\u6210\u529F`);
-        if (i + BATCH_SIZE < blocks.length) {
-          await new Promise((resolve) => setTimeout(resolve, 500));
-        }
-      } catch (error) {
-        this.logError(`[\u667A\u80FD\u66F4\u65B0] \u7B2C ${batchNumber} \u6279\u975E\u8868\u683C\u5757\u521B\u5EFA\u5931\u8D25:`, error, {
-          documentId,
-          rootBlockId,
-          batchNumber,
-          batchSize: batch.length
-        });
-        throw new Error(`\u521B\u5EFA\u975E\u8868\u683C\u5757\u5931\u8D25 (\u7B2C${batchNumber}\u6279): ${error instanceof Error ? error.message : String(error)}`);
-      }
-    }
-  }
-  /**
-   * 分步创建表格块（先创建空表格，再添加单元格内容）
-   * @param documentId 文档ID
-   * @param rootBlockId 根块ID
-   * @param tableBlocks 表格块数组
-   * @param startIndex 起始索引
-   */
-  async createTableBlocksStepByStep(documentId, rootBlockId, tableBlocks, startIndex) {
-    var _a, _b;
-    let currentIndex = startIndex;
-    for (const tableBlock of tableBlocks) {
-      this.debug(`[\u667A\u80FD\u66F4\u65B0] \u5F00\u59CB\u5206\u6B65\u521B\u5EFA\u8868\u683C\u5757\uFF0C\u7D22\u5F15\u4F4D\u7F6E: ${currentIndex}`);
-      try {
-        const emptyTableBlock = this.createEmptyTableBlock(tableBlock);
-        this.debug(`[\u667A\u80FD\u66F4\u65B0] \u6B65\u9AA41: \u521B\u5EFA\u7A7A\u8868\u683C\u5757 (${emptyTableBlock.table.property.row_size}x${emptyTableBlock.table.property.column_size})`);
-        const createResult = await this.feishuClient.createDocumentBlocks(
-          documentId,
-          rootBlockId,
-          currentIndex,
-          [emptyTableBlock]
-        );
-        const createdTableBlockId = (_b = (_a = createResult == null ? void 0 : createResult.children) == null ? void 0 : _a[0]) == null ? void 0 : _b.block_id;
-        if (!createdTableBlockId) {
-          throw new Error("\u65E0\u6CD5\u83B7\u53D6\u521B\u5EFA\u7684\u8868\u683C\u5757ID");
-        }
-        this.debug(`[\u667A\u80FD\u66F4\u65B0] \u6B65\u9AA41\u5B8C\u6210: \u7A7A\u8868\u683C\u5757\u5DF2\u521B\u5EFA\uFF0CID: ${createdTableBlockId}`);
-        if (tableBlock.children && tableBlock.children.length > 0) {
-          this.debug(`[\u667A\u80FD\u66F4\u65B0] \u6B65\u9AA42: \u4E3A\u8868\u683C\u6DFB\u52A0 ${tableBlock.children.length} \u884C\u5185\u5BB9`);
-          await this.addTableRowsAndCells(documentId, createdTableBlockId, tableBlock.children);
-          this.debug(`[\u667A\u80FD\u66F4\u65B0] \u6B65\u9AA42\u5B8C\u6210: \u8868\u683C\u5185\u5BB9\u5DF2\u6DFB\u52A0`);
-        }
-        currentIndex++;
-        this.debug(`[\u667A\u80FD\u66F4\u65B0] \u8868\u683C\u5757\u521B\u5EFA\u5B8C\u6210\uFF0C\u4E0B\u4E00\u4E2A\u5757\u7D22\u5F15: ${currentIndex}`);
-        await new Promise((resolve) => setTimeout(resolve, 1e3));
-      } catch (error) {
-        this.logError(`[\u667A\u80FD\u66F4\u65B0] \u8868\u683C\u5757\u521B\u5EFA\u5931\u8D25:`, error, { documentId, rootBlockId, index: currentIndex });
-        throw new Error(`\u521B\u5EFA\u8868\u683C\u5757\u5931\u8D25: ${error instanceof Error ? error.message : String(error)}`);
-      }
-    }
-  }
-  /**
-   * 创建空表格块（移除所有子块内容）
-   * @param tableBlock 原始表格块
-   * @returns 空表格块
-   */
-  createEmptyTableBlock(tableBlock) {
-    var _a, _b, _c, _d, _e;
-    const emptyBlock = {
-      block_type: tableBlock.block_type,
-      table: {
-        property: {
-          row_size: ((_b = (_a = tableBlock.table) == null ? void 0 : _a.property) == null ? void 0 : _b.row_size) || 1,
-          column_size: ((_d = (_c = tableBlock.table) == null ? void 0 : _c.property) == null ? void 0 : _d.column_size) || 1
-        }
-      }
-    };
-    if ((_e = tableBlock.table) == null ? void 0 : _e.merge_info) {
-      this.debug("[\u667A\u80FD\u66F4\u65B0] \u79FB\u9664\u8868\u683C\u5757\u4E2D\u7684merge_info\u5B57\u6BB5");
-    }
-    return emptyBlock;
-  }
-  /**
-   * 为表格添加行和单元格内容
-   * @param documentId 文档ID
-   * @param tableBlockId 表格块ID
-   * @param tableRows 表格行数组
-   */
-  async addTableRowsAndCells(documentId, tableBlockId, tableRows) {
-    var _a, _b, _c;
-    for (let rowIndex = 0; rowIndex < tableRows.length; rowIndex++) {
-      const row = tableRows[rowIndex];
-      this.debug(`[\u667A\u80FD\u66F4\u65B0] \u6DFB\u52A0\u7B2C ${rowIndex + 1} \u884C\uFF0C\u5305\u542B ${((_a = row.children) == null ? void 0 : _a.length) || 0} \u4E2A\u5355\u5143\u683C`);
-      try {
-        const rowBlock = {
-          block_type: "table_row",
-          table_row: {}
-        };
-        const rowResult = await this.feishuClient.createDocumentBlocks(
-          documentId,
-          tableBlockId,
-          rowIndex,
-          [rowBlock]
-        );
-        const createdRowBlockId = (_c = (_b = rowResult == null ? void 0 : rowResult.children) == null ? void 0 : _b[0]) == null ? void 0 : _c.block_id;
-        if (!createdRowBlockId) {
-          throw new Error(`\u65E0\u6CD5\u83B7\u53D6\u521B\u5EFA\u7684\u8868\u683C\u884CID (\u884C${rowIndex + 1})`);
-        }
-        if (row.children && row.children.length > 0) {
-          await this.addTableCells(documentId, createdRowBlockId, row.children);
-        }
-        await new Promise((resolve) => setTimeout(resolve, 300));
-      } catch (error) {
-        this.logError(`[\u667A\u80FD\u66F4\u65B0] \u6DFB\u52A0\u8868\u683C\u884C\u5931\u8D25 (\u884C${rowIndex + 1}):`, error, {
-          documentId,
-          tableBlockId,
-          rowIndex
-        });
-        throw new Error(`\u6DFB\u52A0\u8868\u683C\u884C\u5931\u8D25 (\u884C${rowIndex + 1}): ${error instanceof Error ? error.message : String(error)}`);
-      }
-    }
-  }
-  /**
-   * 为表格行添加单元格
-   * @param documentId 文档ID
-   * @param rowBlockId 表格行块ID
-   * @param tableCells 表格单元格数组
-   */
-  async addTableCells(documentId, rowBlockId, tableCells) {
-    for (let cellIndex = 0; cellIndex < tableCells.length; cellIndex++) {
-      const cell = tableCells[cellIndex];
-      try {
-        const cellBlock = {
-          block_type: "table_cell",
-          table_cell: {},
-          children: cell.children || []
-        };
-        await this.feishuClient.createDocumentBlocks(
-          documentId,
-          rowBlockId,
-          cellIndex,
-          [cellBlock]
-        );
-        this.debug(`[\u667A\u80FD\u66F4\u65B0] \u5355\u5143\u683C ${cellIndex + 1} \u521B\u5EFA\u6210\u529F`);
-      } catch (error) {
-        this.logError(`[\u667A\u80FD\u66F4\u65B0] \u6DFB\u52A0\u8868\u683C\u5355\u5143\u683C\u5931\u8D25 (\u5355\u5143\u683C${cellIndex + 1}):`, error, {
-          documentId,
-          rowBlockId,
-          cellIndex
-        });
-        throw new Error(`\u6DFB\u52A0\u8868\u683C\u5355\u5143\u683C\u5931\u8D25 (\u5355\u5143\u683C${cellIndex + 1}): ${error instanceof Error ? error.message : String(error)}`);
-      }
-    }
-  }
-  /**
-   * 处理Callout转换（复用原有上传流程的逻辑）
-   * @param documentId 文档ID
-   */
-  async processCalloutConversion(documentId) {
-    try {
-      const blocks = await this.feishuClient.getDocumentBlocks(documentId);
-      const blockMap = /* @__PURE__ */ new Map();
-      blocks.forEach((block) => {
-        blockMap.set(block.block_id, block);
-      });
-      const blocksWithIndex = blocks.map((block, index) => ({
-        ...block,
-        index
-      }));
-      const quoteBlocks = blocksWithIndex.filter((block) => block.block_type === 11);
-      if (quoteBlocks.length === 0) {
-        this.debug("[\u667A\u80FD\u66F4\u65B0] \u6CA1\u6709\u627E\u5230\u9700\u8981\u8F6C\u6362\u7684Callout\u5757");
-        return;
-      }
-      this.debug(`[\u667A\u80FD\u66F4\u65B0] \u627E\u5230 ${quoteBlocks.length} \u4E2ACallout\u5757\u9700\u8981\u8F6C\u6362`);
-      for (let i = 0; i < quoteBlocks.length; i++) {
-        const quoteBlock = quoteBlocks[i];
-        this.debug(`[\u667A\u80FD\u66F4\u65B0] \u6B63\u5728\u8F6C\u6362\u7B2C ${i + 1}/${quoteBlocks.length} \u4E2ACallout...`);
-        try {
-          const childrenBlocks = this.prepareChildrenBlocks(quoteBlock, blockMap);
-          const calloutBlock = {
-            block_type: 34,
-            // 34表示callout块
-            callout: {
-              background_color: 1,
-              // 默认背景色
-              border_color: 1,
-              // 默认边框色
-              text_color: 1
-              // 默认文字色
-            },
-            children: childrenBlocks
-            // 包含原有子块
-          };
-          await this.feishuClient.createDocumentBlocks(
-            documentId,
-            quoteBlock.parent_id || documentId,
-            quoteBlock.index,
-            [calloutBlock]
-          );
-          await this.feishuClient.deleteDocumentBlock(
-            documentId,
-            quoteBlock.block_id,
-            quoteBlock.parent_id,
-            quoteBlock.index
-          );
-          if (i < quoteBlocks.length - 1) {
-            await new Promise((resolve) => setTimeout(resolve, 300));
-          }
-        } catch (error) {
-          console.warn(`[\u667A\u80FD\u66F4\u65B0] \u8F6C\u6362\u7B2C ${i + 1} \u4E2ACallout\u5931\u8D25:`, error);
-        }
-      }
-      this.debug("[\u667A\u80FD\u66F4\u65B0] Callout\u8F6C\u6362\u5904\u7406\u5B8C\u6210");
-    } catch (error) {
-      console.warn("[\u667A\u80FD\u66F4\u65B0] Callout\u8F6C\u6362\u8FC7\u7A0B\u4E2D\u51FA\u73B0\u9519\u8BEF:", error);
-    }
-  }
-  /**
-   * 准备块的子块用于创建（递归处理）
-   * @param parentBlock 父块
-   * @param blockMap 块ID映射
-   * @returns 准备好的子块数组
-   */
-  prepareChildrenBlocks(parentBlock, blockMap) {
-    if (!parentBlock.children || parentBlock.children.length === 0) {
-      return [];
-    }
-    const result = [];
-    for (const childId of parentBlock.children) {
-      const childBlock = blockMap.get(childId);
-      if (!childBlock)
-        continue;
-      const { block_id, parent_id, children, index, ...blockContent } = childBlock;
-      const newBlock = { ...blockContent };
-      if (childBlock.children && childBlock.children.length > 0) {
-        newBlock.children = this.prepareChildrenBlocks(childBlock, blockMap);
-      }
-      result.push(newBlock);
-    }
-    return result;
-  }
-  /**
-   * 检查块类型是否支持创建
-   * @param blockType 块类型
-   * @returns 是否支持创建
-   */
-  isSupportedBlockType(blockType) {
-    return !this.UNSUPPORTED_BLOCK_TYPES.has(blockType);
-  }
-  /**
-   * 验证父子块类型关系是否合法
-   * @param parentBlockType 父块类型
-   * @param childBlockType 子块类型
-   * @returns 是否允许该父子关系
-   */
-  /**
-   * 递归验证块及其子块的父子关系
-   * @param block 要验证的块
-   * @param parentBlockType 父块类型（可选）
-   * @returns 验证结果和错误信息
-   */
-  validateBlockHierarchy(block, parentBlockType) {
-    const errors = [];
-    if (parentBlockType && !this.isValidParentChildRelation(parentBlockType, block.block_type)) {
-      errors.push(`\u7236\u5757\u7C7B\u578B "${parentBlockType}" \u4E0D\u652F\u6301\u5B50\u5757\u7C7B\u578B "${block.block_type}"`);
-    }
-    if (block.children && Array.isArray(block.children)) {
-      for (const child of block.children) {
-        const childValidation = this.validateBlockHierarchy(child, block.block_type);
-        errors.push(...childValidation.errors);
-      }
-    }
-    return {
-      isValid: errors.length === 0,
-      errors
-    };
-  }
-  /**
-   * 验证文档访问权限（简化版本）
-   * @param documentId 文档ID
-   * @returns 验证结果
-   */
-  async validateDocumentAccess(documentId) {
-    const errors = [];
-    try {
-      const token = await this.feishuClient.getAccessToken();
-      const url = `${this.feishuClient["baseUrl"]}/docx/v1/documents/${documentId}`;
-      const requestParam = {
-        url,
-        method: "GET",
-        headers: {
-          "Authorization": `Bearer ${token}`,
-          "Content-Type": "application/json"
-        }
-      };
-      const response = await (0, import_obsidian3.requestUrl)(requestParam);
-      const result = response.json;
-      if (result.code !== 0) {
-        errors.push(`\u6587\u6863\u4E0D\u53EF\u8BBF\u95EE: ${result.msg || "\u672A\u77E5\u9519\u8BEF"}`);
-        return { isValid: false, errors };
-      }
-      this.debug("[\u667A\u80FD\u66F4\u65B0] \u6587\u6863\u8BBF\u95EE\u9A8C\u8BC1\u901A\u8FC7");
-    } catch (error) {
-      this.logError("[\u667A\u80FD\u66F4\u65B0] \u6587\u6863\u8BBF\u95EE\u9A8C\u8BC1\u5931\u8D25:", error, { documentId });
-      errors.push(`\u6587\u6863\u8BBF\u95EE\u5931\u8D25: ${(error == null ? void 0 : error.message) || "\u7F51\u7EDC\u9519\u8BEF"}`);
-    }
-    return {
-      isValid: errors.length === 0,
-      errors
-    };
-  }
-  /**
-   * 测试创建权限（通过创建一个简单的文本块）
-   * @param documentId 文档ID
-   * @param rootBlockId 根块ID
-   * @returns 权限测试结果
-   */
-  async testCreatePermissions(documentId, rootBlockId) {
-    var _a, _b, _c, _d;
-    try {
-      const testBlock = {
-        block_type: "text",
-        text: {
-          elements: [
-            {
-              text_run: {
-                content: "[\u6743\u9650\u6D4B\u8BD5]"
-              }
-            }
-          ]
-        }
-      };
-      const result = await this.feishuClient.createDocumentBlocks(
-        documentId,
-        rootBlockId,
-        0,
-        [testBlock]
-      );
-      if ((_b = (_a = result == null ? void 0 : result.children) == null ? void 0 : _a[0]) == null ? void 0 : _b.block_id) {
-        const createdBlockId = result.children[0].block_id;
-        try {
-          await this.feishuClient.deleteDocumentBlock(documentId, createdBlockId);
-        } catch (deleteError) {
-          console.warn("[\u667A\u80FD\u66F4\u65B0] \u5220\u9664\u6D4B\u8BD5\u5757\u5931\u8D25\uFF0C\u4F46\u4E0D\u5F71\u54CD\u6743\u9650\u9A8C\u8BC1:", deleteError);
-        }
-        this.debug("[\u667A\u80FD\u66F4\u65B0] \u521B\u5EFA\u6743\u9650\u6D4B\u8BD5\u901A\u8FC7");
-        return { hasPermission: true };
-      } else {
-        console.warn("[\u667A\u80FD\u66F4\u65B0] \u521B\u5EFA\u6743\u9650\u6D4B\u8BD5\u5931\u8D25: \u672A\u8FD4\u56DE\u5757ID");
-        return {
-          hasPermission: false,
-          error: "\u6743\u9650\u4E0D\u8DB3\u6216\u6587\u6863\u4E0D\u652F\u6301\u521B\u5EFA\u5757"
-        };
-      }
-    } catch (error) {
-      this.logError("[\u667A\u80FD\u66F4\u65B0] \u6743\u9650\u6D4B\u8BD5\u5F02\u5E38:", error, { documentId, rootBlockId });
-      if (((_c = error == null ? void 0 : error.message) == null ? void 0 : _c.includes("400")) || ((_d = error == null ? void 0 : error.message) == null ? void 0 : _d.includes("Request failed, status 400"))) {
-        return {
-          hasPermission: false,
-          error: "\u6587\u6863\u4E0D\u652F\u6301\u7F16\u8F91\u6216\u6743\u9650\u4E0D\u8DB3\uFF0C\u8BF7\u68C0\u67E5\u6587\u6863\u6743\u9650\u8BBE\u7F6E"
-        };
-      }
-      return {
-        hasPermission: false,
-        error: `\u6743\u9650\u6D4B\u8BD5\u5931\u8D25: ${(error == null ? void 0 : error.message) || "\u672A\u77E5\u9519\u8BEF"}`
-      };
-    }
-  }
-  /**
-   * 验证和修正块顺序（根据官方建议）
-   * @param blocks 转换API返回的块数组
-   * @param originalMarkdown 原始Markdown内容
-   * @returns 修正后的块数组
-   */
-  validateAndFixBlockOrder(blocks, originalMarkdown) {
-    this.debug("[\u667A\u80FD\u66F4\u65B0] \u5F00\u59CB\u9A8C\u8BC1\u548C\u4FEE\u6B63\u5757\u987A\u5E8F...");
-    const markdownStructure = this.parseMarkdownStructure(originalMarkdown);
-    this.debug("[\u667A\u80FD\u66F4\u65B0] \u539F\u59CBMarkdown\u7ED3\u6784:", markdownStructure);
-    const blockStructure = blocks.map((block, index) => ({
-      index,
-      type: block.block_type,
-      content: this.getBlockContentPreview(block),
-      block
-    }));
-    this.debug("[\u667A\u80FD\u66F4\u65B0] \u8F6C\u6362\u540E\u5757\u7ED3\u6784:", blockStructure);
-    const reorderedBlocks = this.reorderBlocksByImprovedMatching(blocks, markdownStructure);
-    this.debug("[\u667A\u80FD\u66F4\u65B0] \u5757\u987A\u5E8F\u4FEE\u6B63\u5B8C\u6210");
-    this.debug("[\u667A\u80FD\u66F4\u65B0] \u4FEE\u6B63\u540E\u7684\u5757\u987A\u5E8F:");
-    reorderedBlocks.forEach((block, index) => {
-      this.debug(`  [${index}] \u7C7B\u578B: ${block.block_type}, \u5185\u5BB9: ${this.getBlockContentPreview(block)}`);
-    });
-    return reorderedBlocks;
-  }
-  /**
-   * 解析Markdown结构顺序
-   * @param markdown Markdown内容
-   * @returns 结构信息数组
-   */
-  parseMarkdownStructure(markdown) {
-    const lines = markdown.split("\n");
-    const structure = [];
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i] || "";
-      const trimmedLine = line.trim();
-      if (!trimmedLine)
-        continue;
-      let type = "text";
-      let content = trimmedLine;
-      if (trimmedLine.startsWith("# ")) {
-        type = "heading1";
-        content = trimmedLine.substring(2).trim();
-      } else if (trimmedLine.startsWith("## ")) {
-        type = "heading2";
-        content = trimmedLine.substring(3).trim();
-      } else if (trimmedLine.startsWith("### ")) {
-        type = "heading3";
-        content = trimmedLine.substring(4).trim();
-      } else if (trimmedLine.startsWith("- ") || trimmedLine.startsWith("* ")) {
-        type = "bullet";
-        content = trimmedLine.substring(2).trim();
-      } else if (/^\d+\.\s/.test(trimmedLine)) {
-        type = "ordered";
-        content = trimmedLine.replace(/^\d+\.\s/, "").trim();
-      } else if (trimmedLine.startsWith("> ")) {
-        type = "quote";
-        content = trimmedLine.substring(2).trim();
-      } else if (trimmedLine === ">") {
-        type = "text";
-        content = ">";
-      } else if (trimmedLine.startsWith("```")) {
-        type = "code";
-        content = "[\u4EE3\u7801\u5757]";
-      } else if (trimmedLine.includes("![") && trimmedLine.includes("](")) {
-        type = "image";
-        content = "[\u56FE\u7247]";
-      }
-      structure.push({ type, content: content.substring(0, 50), line: i });
-    }
-    return structure;
-  }
-  /**
-   * 使用基于内容相似度的智能匹配重新排序块
-   * @param blocks 飞书块数组
-   * @param markdownStructure Markdown结构数组
-   * @returns 重新排序后的块数组
-   */
-  reorderBlocksByImprovedMatching(blocks, markdownStructure) {
-    this.debug("[\u667A\u80FD\u66F4\u65B0] \u5F00\u59CB\u57FA\u4E8E\u5185\u5BB9\u76F8\u4F3C\u5EA6\u7684\u667A\u80FD\u5339\u914D\u7B97\u6CD5...");
-    this.debug(`[\u5339\u914D\u4FE1\u606F] \u98DE\u4E66\u5757\u6570\u91CF: ${blocks.length}, Markdown\u7ED3\u6784\u6570\u91CF: ${markdownStructure.length}`);
-    const reorderedBlocks = [];
-    const usedBlockIndices = /* @__PURE__ */ new Set();
-    for (let structIndex = 0; structIndex < markdownStructure.length; structIndex++) {
-      const struct = markdownStructure[structIndex];
-      if (!struct)
-        continue;
-      let bestMatch = -1;
-      let bestScore = 0;
-      for (let blockIndex = 0; blockIndex < blocks.length; blockIndex++) {
-        if (usedBlockIndices.has(blockIndex))
-          continue;
-        const block = blocks[blockIndex];
-        const score = this.calculateContentMatchScore(block, struct);
-        if (score > bestScore) {
-          bestScore = score;
-          bestMatch = blockIndex;
-        }
-      }
-      if (bestMatch !== -1 && bestScore >= 0.5) {
-        const matchedBlock = blocks[bestMatch];
-        reorderedBlocks.push(matchedBlock);
-        usedBlockIndices.add(bestMatch);
-        const blockContent = this.getBlockContentPreview(matchedBlock);
-        this.debug(`[\u667A\u80FD\u5339\u914D] Markdown[${structIndex}]: "${struct.content}" -> \u98DE\u4E66\u5757[${bestMatch}]: "${blockContent}" (\u5F97\u5206: ${bestScore.toFixed(2)})`);
-      } else {
-        this.debug(`[\u672A\u5339\u914D] Markdown[${structIndex}]: "${struct.content}" - \u672A\u627E\u5230\u5408\u9002\u7684\u98DE\u4E66\u5757\u5339\u914D`);
-      }
-    }
-    for (let blockIndex = 0; blockIndex < blocks.length; blockIndex++) {
-      if (!usedBlockIndices.has(blockIndex)) {
-        reorderedBlocks.push(blocks[blockIndex]);
-        const blockContent = this.getBlockContentPreview(blocks[blockIndex]);
-        this.debug(`[\u5269\u4F59\u5757] \u6DFB\u52A0\u98DE\u4E66\u5757[${blockIndex}]: "${blockContent}" \u5230\u672B\u5C3E`);
-      }
-    }
-    this.debug(`[\u5339\u914D\u7ED3\u679C] \u6210\u529F\u5339\u914D: ${usedBlockIndices.size}/${blocks.length} \u4E2A\u98DE\u4E66\u5757`);
-    return reorderedBlocks;
-  }
-  /**
-   * 计算内容匹配得分
-   * @param block 飞书块
-   * @param struct Markdown结构元素
-   * @returns 匹配得分 (0-1)
-   */
-  calculateContentMatchScore(block, struct) {
-    const blockContent = this.getBlockContentPreview(block);
-    if (!blockContent || !struct.content)
-      return 0;
-    const cleanBlockContent = this.cleanContentForComparison(blockContent);
-    const cleanStructContent = this.cleanContentForComparison(struct.content);
-    if (cleanBlockContent === cleanStructContent) {
-      return 1;
-    }
-    const blockType = this.mapBlockTypeToMarkdown(block.block_type);
-    let typeScore = 0;
-    if (blockType === struct.type) {
-      if (["ordered", "bullet"].includes(blockType)) {
-        typeScore = 0.6;
-      } else {
-        typeScore = 0.4;
-      }
-    } else {
-      if (struct.type === "quote" && block.block_type === 15) {
-        if (blockContent.includes("[!")) {
-          typeScore = 0.35;
-        } else {
-          typeScore = 0.4;
-        }
-      }
-    }
-    if (typeScore > 0) {
-      const contentScore2 = this.calculateAdvancedContentSimilarity(blockContent, struct.content);
-      return typeScore + contentScore2 * 0.6;
-    }
-    const contentScore = this.calculateAdvancedContentSimilarity(blockContent, struct.content);
-    if (contentScore > 0.8) {
-      return contentScore * 0.5;
-    }
-    return 0;
-  }
-  /**
-   * 计算高级内容相似度
-   * @param content1 内容1
-   * @param content2 内容2
-   * @returns 相似度 (0-1)
-   */
-  calculateAdvancedContentSimilarity(content1, content2) {
-    if (!content1 || !content2)
-      return 0;
-    const clean1 = this.cleanContentForComparison(content1);
-    const clean2 = this.cleanContentForComparison(content2);
-    if (clean1 === clean2)
-      return 1;
-    const lengthRatio = Math.min(clean1.length, clean2.length) / Math.max(clean1.length, clean2.length);
-    if (lengthRatio < 0.3)
-      return 0;
-    if (clean1.includes(clean2) && clean2.length >= 3) {
-      return 0.8;
-    }
-    if (clean2.includes(clean1) && clean1.length >= 3) {
-      return 0.8;
-    }
-    const words1 = clean1.split(/\s+/).filter((w) => w.length > 1);
-    const words2 = clean2.split(/\s+/).filter((w) => w.length > 1);
-    if (words1.length === 0 || words2.length === 0) {
-      return this.calculateCharacterSimilarity(clean1, clean2);
-    }
-    const commonWords = words1.filter((word) => words2.includes(word));
-    const overlapRatio = commonWords.length / Math.max(words1.length, words2.length);
-    if (commonWords.length === 0)
-      return 0;
-    if (overlapRatio >= 0.8)
-      return 0.9;
-    if (overlapRatio >= 0.6)
-      return 0.7;
-    if (overlapRatio >= 0.4)
-      return 0.5;
-    if (overlapRatio >= 0.2)
-      return 0.3;
-    return 0.1;
-  }
-  /**
-   * 清理内容用于比较
-   * @param content 原始内容
-   * @returns 清理后的内容
-   */
-  cleanContentForComparison(content) {
-    let cleaned = content.toLowerCase().trim();
-    if (cleaned.length <= 2) {
-      return cleaned;
-    }
-    cleaned = cleaned.replace(/^(h\d+:\s*)/i, "").replace(/^(\d+\.\s*)/i, "").replace(/^(-\s*|\*\s*)/i, "").replace(/[^\w\s\u4e00-\u9fff>!]/g, "").trim();
-    return cleaned;
-  }
-  /**
-   * 计算字符相似度
-   * @param str1 字符串1
-   * @param str2 字符串2
-   * @returns 相似度 (0-1)
-   */
-  calculateCharacterSimilarity(str1, str2) {
-    if (str1.length === 0 && str2.length === 0)
-      return 1;
-    if (str1.length === 0 || str2.length === 0)
-      return 0;
-    const maxLength = Math.max(str1.length, str2.length);
-    const distance = this.levenshteinDistance(str1, str2);
-    return Math.max(0, (maxLength - distance) / maxLength);
-  }
-  /**
-   * 计算编辑距离
-   * @param str1 字符串1
-   * @param str2 字符串2
-   * @returns 编辑距离
-   */
-  levenshteinDistance(str1, str2) {
-    const matrix = Array(str2.length + 1).fill(null).map(() => Array(str1.length + 1).fill(0));
-    for (let i = 0; i <= str1.length; i++)
-      matrix[0][i] = i;
-    for (let j = 0; j <= str2.length; j++)
-      matrix[j][0] = j;
-    for (let j = 1; j <= str2.length; j++) {
-      for (let i = 1; i <= str1.length; i++) {
-        const indicator = str1[i - 1] === str2[j - 1] ? 0 : 1;
-        matrix[j][i] = Math.min(
-          matrix[j][i - 1] + 1,
-          // deletion
-          matrix[j - 1][i] + 1,
-          // insertion
-          matrix[j - 1][i - 1] + indicator
-          // substitution
-        );
-      }
-    }
-    return matrix[str2.length][str1.length];
-  }
-  /**
-   * 获取块内容预览（用于调试）
-   * @param block 块对象
-   * @returns 内容预览字符串
-   */
-  getBlockContentPreview(block) {
-    var _a, _b, _c, _d, _e, _f, _g, _h;
-    try {
-      if ((_a = block.text) == null ? void 0 : _a.elements) {
-        const textContent = block.text.elements.filter((el) => {
-          var _a2;
-          return (_a2 = el.text_run) == null ? void 0 : _a2.content;
-        }).map((el) => el.text_run.content).join("");
-        return textContent.substring(0, 50) + (textContent.length > 50 ? "..." : "");
-      }
-      if ((_b = block.heading1) == null ? void 0 : _b.elements) {
-        const headingContent = block.heading1.elements.filter((el) => {
-          var _a2;
-          return (_a2 = el.text_run) == null ? void 0 : _a2.content;
-        }).map((el) => el.text_run.content).join("");
-        return `H1: ${headingContent.substring(0, 40)}${headingContent.length > 40 ? "..." : ""}`;
-      }
-      if ((_c = block.heading2) == null ? void 0 : _c.elements) {
-        const headingContent = block.heading2.elements.filter((el) => {
-          var _a2;
-          return (_a2 = el.text_run) == null ? void 0 : _a2.content;
-        }).map((el) => el.text_run.content).join("");
-        return `H2: ${headingContent.substring(0, 40)}${headingContent.length > 40 ? "..." : ""}`;
-      }
-      if ((_d = block.heading3) == null ? void 0 : _d.elements) {
-        const headingContent = block.heading3.elements.filter((el) => {
-          var _a2;
-          return (_a2 = el.text_run) == null ? void 0 : _a2.content;
-        }).map((el) => el.text_run.content).join("");
-        return `H3: ${headingContent.substring(0, 40)}${headingContent.length > 40 ? "..." : ""}`;
-      }
-      if ((_e = block.bullet) == null ? void 0 : _e.elements) {
-        const bulletContent = block.bullet.elements.filter((el) => {
-          var _a2;
-          return (_a2 = el.text_run) == null ? void 0 : _a2.content;
-        }).map((el) => el.text_run.content).join("");
-        return `\u2022 ${bulletContent.substring(0, 40)}${bulletContent.length > 40 ? "..." : ""}`;
-      }
-      if ((_f = block.ordered) == null ? void 0 : _f.elements) {
-        const orderedContent = block.ordered.elements.filter((el) => {
-          var _a2;
-          return (_a2 = el.text_run) == null ? void 0 : _a2.content;
-        }).map((el) => el.text_run.content).join("");
-        return `1. ${orderedContent.substring(0, 40)}${orderedContent.length > 40 ? "..." : ""}`;
-      }
-      if ((_g = block.quote) == null ? void 0 : _g.elements) {
-        const quoteContent = block.quote.elements.filter((el) => {
-          var _a2;
-          return (_a2 = el.text_run) == null ? void 0 : _a2.content;
-        }).map((el) => el.text_run.content).join("");
-        return `> ${quoteContent.substring(0, 40)}${quoteContent.length > 40 ? "..." : ""}`;
-      }
-      if (block.image) {
-        return `[\u56FE\u7247]`;
-      }
-      if ((_h = block.code) == null ? void 0 : _h.language) {
-        return `[\u4EE3\u7801\u5757: ${block.code.language}]`;
-      }
-      return `[${block.block_type}]`;
-    } catch (error) {
-      return `[${block.block_type}] (\u89E3\u6790\u9519\u8BEF)`;
-    }
-  }
-  /**
-   * 处理块数据，为插入做准备
-   * @param blocks 原始块数据
-   * @param parentBlockType 父块类型（用于验证父子关系）
-   * @returns 处理后的块数据
-   */
-  processBlocksForInsertion(blocks, parentBlockType) {
-    const processBlock = (block, parentType) => {
-      if (!this.isSupportedBlockType(block.block_type)) {
-        console.warn(`[\u667A\u80FD\u66F4\u65B0] \u8DF3\u8FC7\u4E0D\u652F\u6301\u521B\u5EFA\u7684\u5757\u7C7B\u578B: ${block.block_type}`);
-        return null;
-      }
-      if (parentType && !this.isValidParentChildRelation(parentType, block.block_type)) {
-        console.warn(`[\u667A\u80FD\u66F4\u65B0] \u8DF3\u8FC7\u4E0D\u5408\u6CD5\u7684\u7236\u5B50\u5757\u5173\u7CFB: \u7236\u5757 "${parentType}" \u4E0D\u652F\u6301\u5B50\u5757 "${block.block_type}"`);
-        return null;
-      }
-      let processedBlock = { ...block };
-      if (block.block_type === "table" && block.table) {
-        if (block.table.merge_info) {
-          delete processedBlock.table.merge_info;
-        }
-        if (!processedBlock.table.property) {
-          processedBlock.table.property = {};
-        }
-        if (!processedBlock.table.property.row_size || processedBlock.table.property.row_size <= 0) {
-          processedBlock.table.property.row_size = Math.min(
-            Math.max(1, processedBlock.table.property.row_size || 1),
-            9
-            // 飞书表格最大行数限制
-          );
-          this.debug(`[\u667A\u80FD\u66F4\u65B0] \u8868\u683C\u5757\u7F3A\u5C11row_size\u53C2\u6570\uFF0C\u5DF2\u8BBE\u7F6E\u4E3A: ${processedBlock.table.property.row_size}`);
-        }
-        if (!processedBlock.table.property.column_size || processedBlock.table.property.column_size <= 0) {
-          processedBlock.table.property.column_size = Math.min(
-            Math.max(1, processedBlock.table.property.column_size || 1),
-            9
-            // 飞书表格最大列数限制
-          );
-          this.debug(`[\u667A\u80FD\u66F4\u65B0] \u8868\u683C\u5757\u7F3A\u5C11column_size\u53C2\u6570\uFF0C\u5DF2\u8BBE\u7F6E\u4E3A: ${processedBlock.table.property.column_size}`);
-        }
-        const totalCells = processedBlock.table.property.row_size * processedBlock.table.property.column_size;
-        if (totalCells > 2e3) {
-          console.warn(`[\u667A\u80FD\u66F4\u65B0] \u8868\u683C\u5355\u5143\u683C\u603B\u6570 ${totalCells} \u8D85\u8FC7\u9650\u5236 2000\uFF0C\u5C06\u8C03\u6574\u8868\u683C\u5927\u5C0F`);
-          const ratio = Math.sqrt(2e3 / totalCells);
-          processedBlock.table.property.row_size = Math.max(1, Math.floor(processedBlock.table.property.row_size * ratio));
-          processedBlock.table.property.column_size = Math.max(1, Math.floor(processedBlock.table.property.column_size * ratio));
-          this.debug(`[\u667A\u80FD\u66F4\u65B0] \u8868\u683C\u5927\u5C0F\u5DF2\u8C03\u6574\u4E3A: ${processedBlock.table.property.row_size}x${processedBlock.table.property.column_size}`);
-        }
-      }
-      if (block.block_type === "sheet" && block.sheet) {
-        if (!processedBlock.sheet.row_size || processedBlock.sheet.row_size <= 0) {
-          processedBlock.sheet.row_size = Math.min(
-            Math.max(1, processedBlock.sheet.row_size || 1),
-            9
-            // 飞书电子表格最大行数限制
-          );
-          this.debug(`[\u667A\u80FD\u66F4\u65B0] \u7535\u5B50\u8868\u683C\u5757\u7F3A\u5C11row_size\u53C2\u6570\uFF0C\u5DF2\u8BBE\u7F6E\u4E3A: ${processedBlock.sheet.row_size}`);
-        }
-        if (!processedBlock.sheet.column_size || processedBlock.sheet.column_size <= 0) {
-          processedBlock.sheet.column_size = Math.min(
-            Math.max(1, processedBlock.sheet.column_size || 1),
-            9
-            // 飞书电子表格最大列数限制
-          );
-          this.debug(`[\u667A\u80FD\u66F4\u65B0] \u7535\u5B50\u8868\u683C\u5757\u7F3A\u5C11column_size\u53C2\u6570\uFF0C\u5DF2\u8BBE\u7F6E\u4E3A: ${processedBlock.sheet.column_size}`);
-        }
-      }
-      if (processedBlock.children && Array.isArray(processedBlock.children)) {
-        const processedChildren = processedBlock.children.map((child) => processBlock(child, processedBlock.block_type)).filter((child) => child !== null);
-        if (processedChildren.length > 0) {
-          processedBlock.children = processedChildren;
-        } else {
-          delete processedBlock.children;
-        }
-      }
-      return processedBlock;
-    };
-    return blocks.map((block) => processBlock(block, parentBlockType)).filter((block) => block !== null);
-  }
-  /**
-   * 执行智能更新
-   * @param title 文档标题
-   * @param markdownContent Markdown内容
-   * @param uploadHistory 上传历史记录
-   * @param onProgress 进度回调
-   * @returns 更新结果
-   */
-  async performSmartUpdate(title, markdownContent, uploadHistory, onProgress, orderedImageInfos, yamlInfo) {
-    try {
-      onProgress == null ? void 0 : onProgress("\u6B63\u5728\u67E5\u627E\u5DF2\u5B58\u5728\u7684\u6587\u6863...");
-      const existingDoc = this.findExistingDocument(title, uploadHistory);
-      if (!existingDoc) {
-        return {
-          success: false,
-          documentId: "",
-          url: "",
-          error: "\u672A\u627E\u5230\u540C\u540D\u6587\u6863\uFF0C\u65E0\u6CD5\u6267\u884C\u667A\u80FD\u66F4\u65B0"
-        };
-      }
-      this.debug("[\u667A\u80FD\u66F4\u65B0] \u627E\u5230\u540C\u540D\u6587\u6863:", existingDoc);
-      onProgress == null ? void 0 : onProgress("\u{1F4C4} \u627E\u5230\u5DF2\u5B58\u5728\u6587\u6863\uFF0C\u6B63\u5728\u51C6\u5907\u66F4\u65B0...");
-      onProgress == null ? void 0 : onProgress("\u{1F527} \u6B63\u5728\u83B7\u53D6\u6587\u6863\u7ED3\u6784\u4FE1\u606F...");
-      const rootBlockId = await this.getDocumentRootBlockId(existingDoc.docToken);
-      onProgress == null ? void 0 : onProgress("\u6B63\u5728\u6E05\u7A7A\u539F\u6709\u5185\u5BB9...");
-      await this.deleteAllChildBlocks(existingDoc.docToken, rootBlockId);
-      onProgress == null ? void 0 : onProgress("\u6B63\u5728\u66F4\u65B0\u6587\u6863\u5185\u5BB9...");
-      await this.reimportContent(existingDoc.docToken, rootBlockId, markdownContent, orderedImageInfos, yamlInfo);
-      onProgress == null ? void 0 : onProgress("\u6587\u6863\u66F4\u65B0\u5B8C\u6210\uFF01");
-      return {
-        success: true,
-        documentId: existingDoc.docToken,
-        url: existingDoc.url
-      };
-    } catch (error) {
-      this.logError("[\u667A\u80FD\u66F4\u65B0] \u6267\u884C\u5931\u8D25:", error, { title });
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      return {
-        success: false,
-        documentId: "",
-        url: "",
-        error: `\u667A\u80FD\u66F4\u65B0\u5931\u8D25: ${errorMessage}`
-      };
-    }
-  }
-  /**
-   * 检测Markdown内容中是否包含表格
-   * @param markdownContent Markdown内容
-   * @returns 是否包含表格
-   */
-  hasTableInMarkdown(markdownContent) {
-    var _a;
-    const lines = markdownContent.split("\n");
-    for (let i = 0; i < lines.length; i++) {
-      const line = ((_a = lines[i]) == null ? void 0 : _a.trim()) || "";
-      if (line.includes("|") && line.length > 2) {
-        const beforeLines = lines.slice(0, i);
-        const codeBlockCount = beforeLines.filter((l) => l.trim().startsWith("```")).length;
-        if (codeBlockCount % 2 === 0) {
-          const cells = line.split("|").map((cell) => cell.trim());
-          if (cells.length >= 3) {
-            return true;
-          }
-        }
-      }
-    }
-    return false;
-  }
-  /**
-   * 检查是否应该使用智能更新
-   * @param title 文档标题
-   * @param uploadHistory 上传历史记录
-   * @param enableSmartUpdate 是否启用智能更新
-   * @param markdownContent Markdown内容（用于表格检测）
-   * @returns 是否应该使用智能更新
-   */
-  shouldUseSmartUpdate(title, uploadHistory, enableSmartUpdate, markdownContent) {
-    if (!enableSmartUpdate) {
-      return false;
-    }
-    if (markdownContent && this.hasTableInMarkdown(markdownContent)) {
-      this.debug("[\u667A\u80FD\u66F4\u65B0] \u68C0\u6D4B\u5230\u8868\u683C\u5185\u5BB9\uFF0C\u81EA\u52A8\u5207\u6362\u5230\u666E\u901A\u4E0A\u4F20\u6A21\u5F0F");
-      return false;
-    }
-    return this.findExistingDocument(title, uploadHistory) !== null;
-  }
-  /**
-   * 预处理Markdown内容，在普通文本行之间添加空行以便更好地分离块
-   * @param markdown Markdown内容
-   * @returns 处理后的Markdown内容
-   */
-  preprocessMarkdownForBlockSeparation(markdown) {
-    const lines = markdown.split("\n");
-    const processedLines = [];
-    for (let i = 0; i < lines.length; i++) {
-      const currentLine = lines[i] || "";
-      const nextLine = lines[i + 1];
-      processedLines.push(currentLine);
-      if (currentLine && nextLine && this.isPlainTextLine(currentLine) && this.isPlainTextLine(nextLine)) {
-        processedLines.push("");
-      }
-    }
-    return processedLines.join("\n");
-  }
-  /**
-   * 判断是否为普通文本行（非Markdown特殊格式）
-   * @param line 文本行
-   * @returns 是否为普通文本行
-   */
-  isPlainTextLine(line) {
-    const trimmed = line.trim();
-    if (!trimmed)
-      return false;
-    const specialFormats = [
-      /^#{1,6}\s/,
-      // 标题
-      /^\s*[-*+]\s/,
-      // 无序列表
-      /^\s*\d+\.\s/,
-      // 有序列表
-      /^>/,
-      // 引用
-      /^```/,
-      // 代码块
-      /^\s*\|.*\|/,
-      // 表格
-      /^!\[.*\]\(.*\)/,
-      // 图片
-      /^\[.*\]\(.*\)/,
-      // 链接
-      /^---+$/,
-      // 分隔线
-      /^\s*$/
-      // 空行
-    ];
-    return !specialFormats.some((pattern) => pattern.test(trimmed));
-  }
-  /**
-   * 将飞书块类型映射到Markdown类型
-   * @param blockType 飞书块类型（可能是数字或字符串）
-   * @returns Markdown类型
-   */
-  mapBlockTypeToMarkdown(blockType) {
-    const numericMapping = {
-      2: "text",
-      // 普通文本
-      3: "heading1",
-      // 一级标题
-      4: "heading2",
-      // 二级标题
-      5: "heading3",
-      // 三级标题
-      13: "ordered",
-      // 有序列表
-      14: "bullet",
-      // 无序列表
-      15: "quote",
-      // 引用
-      16: "code",
-      // 代码块
-      27: "image",
-      // 图片
-      31: "table"
-      // 表格（根据飞书官方文档）
-    };
-    const stringMapping = {
-      "text": "text",
-      "heading1": "heading1",
-      "heading2": "heading2",
-      "heading3": "heading3",
-      "bullet": "bullet",
-      "ordered": "ordered",
-      "quote": "quote",
-      "code": "code",
-      "image": "image",
-      "table": "table",
-      "table_row": "table_row",
-      "table_cell": "table_cell"
-    };
-    if (typeof blockType === "number") {
-      return numericMapping[blockType] || "text";
-    }
-    const numericType = parseInt(blockType.toString());
-    if (!isNaN(numericType) && numericMapping[numericType]) {
-      return numericMapping[numericType];
-    }
-    return stringMapping[blockType] || "text";
-  }
-  /**
-   * 验证和修正parent_id和children关系
-   * @param blocks 块数组
-   * @returns 修正后的块数组
-   */
-  validateAndFixParentChildRelations(blocks) {
-    this.debug("[\u667A\u80FD\u66F4\u65B0] \u5F00\u59CB\u9A8C\u8BC1\u548C\u4FEE\u6B63parent_id\u548Cchildren\u5173\u7CFB...");
-    const blockMap = /* @__PURE__ */ new Map();
-    const fixedBlocks = blocks.map((block) => ({ ...block }));
-    fixedBlocks.forEach((block) => {
-      if (block.block_id) {
-        blockMap.set(block.block_id, block);
-      }
-    });
-    fixedBlocks.forEach((block) => {
-      if (block.parent_id && !blockMap.has(block.parent_id)) {
-        console.warn(`[\u667A\u80FD\u66F4\u65B0] \u5757 ${block.block_id} \u7684parent_id ${block.parent_id} \u4E0D\u5B58\u5728\uFF0C\u5C06\u6E05\u9664parent_id`);
-        delete block.parent_id;
-      }
-      if (block.children && Array.isArray(block.children)) {
-        const validChildren = [];
-        block.children.forEach((child, index) => {
-          if (child.block_id && blockMap.has(child.block_id)) {
-            const childBlock = blockMap.get(child.block_id);
-            if (childBlock && childBlock.parent_id !== block.block_id) {
-              this.debug(`[\u667A\u80FD\u66F4\u65B0] \u4FEE\u6B63\u5B50\u5757 ${child.block_id} \u7684parent_id: ${childBlock.parent_id} -> ${block.block_id}`);
-              childBlock.parent_id = block.block_id;
-            }
-            validChildren.push(child);
-          } else {
-            console.warn(`[\u667A\u80FD\u66F4\u65B0] \u5757 ${block.block_id} \u7684\u5B50\u5757 ${child.block_id} \u4E0D\u5B58\u5728\uFF0C\u5C06\u4ECEchildren\u4E2D\u79FB\u9664`);
-          }
-        });
-        block.children = validChildren;
-        if (block.children.length === 0) {
-          delete block.children;
-        }
-      }
-      if (block.parent_id) {
-        const parentBlock = blockMap.get(block.parent_id);
-        if (parentBlock && !this.isValidParentChildRelation(parentBlock.block_type, block.block_type)) {
-          console.warn(`[\u667A\u80FD\u66F4\u65B0] \u65E0\u6548\u7684\u7236\u5B50\u5173\u7CFB: ${parentBlock.block_type} -> ${block.block_type}`);
-          delete block.parent_id;
-        }
-      }
-    });
-    this.debug("[\u667A\u80FD\u66F4\u65B0] parent_id\u548Cchildren\u5173\u7CFB\u9A8C\u8BC1\u4FEE\u6B63\u5B8C\u6210");
-    return fixedBlocks;
-  }
-  /**
-   * 验证父子关系是否有效
-   * @param parentType 父块类型
-   * @param childType 子块类型
-   * @returns 是否为有效的父子关系
-   */
-  isValidParentChildRelation(parentType, childType) {
-    var _a;
-    const parentMdType = this.mapBlockTypeToMarkdown(parentType);
-    const childMdType = this.mapBlockTypeToMarkdown(childType);
-    const validRelations = {
-      "ordered": ["text", "ordered", "bullet"],
-      "bullet": ["text", "ordered", "bullet"],
-      "quote": ["text", "heading1", "heading2", "heading3", "ordered", "bullet", "quote"],
-      "text": []
-      // 普通文本通常不包含子元素
-    };
-    return ((_a = validRelations[parentMdType]) == null ? void 0 : _a.includes(childMdType)) || false;
-  }
-  /**
-   * 处理YAML信息块插入
-   * @param documentId 文档ID
-   * @param yamlInfo YAML信息
-   */
-  async processYamlInsertion(documentId, yamlInfo) {
-    try {
-      const yamlProcessor = new YamlProcessor(this.feishuClient);
-      await new Promise((resolve) => setTimeout(resolve, 2e3));
-      await yamlProcessor.insertYamlBlockInDocument(documentId, yamlInfo, 0);
-    } catch (error) {
-      this.logError("[\u667A\u80FD\u66F4\u65B0] YAML \u5904\u7406\u5931\u8D25:", error, { documentId });
-    }
-  }
-};
-var SmartUpdateManager = _SmartUpdateManager;
-SmartUpdateManager.debugEnabled = false;
-
 // main.ts
 var NotificationManager = class {
   constructor() {
@@ -5310,8 +3899,6 @@ var DEFAULT_SETTINGS = {
   // 当前年月
   enableDoubleLinkMode: true,
   // 默认启用双链模式
-  enableSmartUpdate: false,
-  // 默认关闭智能更新模式
   debugLoggingEnabled: false
 };
 var FeishuUploaderPlugin = class extends import_obsidian4.Plugin {
@@ -5323,14 +3910,11 @@ var FeishuUploaderPlugin = class extends import_obsidian4.Plugin {
     this.feishuRichClient = null;
     // 通知管理器
     this.notificationManager = new NotificationManager();
-    // 智能更新管理器
-    this.smartUpdateManager = null;
     // 上次保存的敏感数据哈希，用于检测变化
     this.lastSensitiveDataHash = null;
   }
   applyDebugLoggingSetting() {
     FeishuApiClient.setDebugEnabled(this.settings.debugLoggingEnabled);
-    SmartUpdateManager.setDebugEnabled(this.settings.debugLoggingEnabled);
     MermaidConverter.setDebugEnabled(this.settings.debugLoggingEnabled);
     CalloutConverter.setDebugEnabled(this.settings.debugLoggingEnabled);
     YamlProcessor.setDebugEnabled(this.settings.debugLoggingEnabled);
@@ -5354,15 +3938,15 @@ var FeishuUploaderPlugin = class extends import_obsidian4.Plugin {
       id: "publish-current-document",
       name: "\u5206\u4EAB\u5F53\u524D\u6587\u6863\u5230\u98DE\u4E66",
       callback: () => {
-        this.uploadCurrentDocument();
+        void this.uploadCurrentDocument();
       }
     });
     this.registerEvent(
       this.app.workspace.on("file-menu", (menu, file) => {
         if (file instanceof import_obsidian4.TFile && file.extension === "md") {
           menu.addItem((item) => {
-            item.setTitle("\u5206\u4EAB\u8BE5\u9875\u9762").setIcon("share").onClick(async () => {
-              await this.uploadFile(file);
+            item.setTitle("\u5206\u4EAB\u8BE5\u9875\u9762").setIcon("share").onClick(() => {
+              void this.uploadFile(file);
             });
           });
         }
@@ -5397,13 +3981,9 @@ var FeishuUploaderPlugin = class extends import_obsidian4.Plugin {
       } else {
         this.feishuRichClient = createFeishuClient(this.settings.appId, this.settings.appSecret, this.app, asyncCallback);
       }
-      if (this.feishuClient) {
-        this.smartUpdateManager = new SmartUpdateManager(this.feishuClient);
-      }
     } else {
       this.feishuClient = null;
       this.feishuRichClient = null;
-      this.smartUpdateManager = null;
     }
   }
   onunload() {
@@ -5411,11 +3991,12 @@ var FeishuUploaderPlugin = class extends import_obsidian4.Plugin {
   }
   async loadSettings() {
     const loadedData = await this.loadData();
-    this.settings = Object.assign({}, DEFAULT_SETTINGS, loadedData);
+    const loadedSettings = typeof loadedData === "object" && loadedData !== null ? loadedData : {};
+    this.settings = Object.assign({}, DEFAULT_SETTINGS, loadedSettings);
     const sensitiveFields = ["appId", "appSecret", "folderToken", "userId"];
     let hasPlaintextData = false;
     for (const field of sensitiveFields) {
-      const value = loadedData == null ? void 0 : loadedData[field];
+      const value = loadedSettings[field];
       if (value && typeof value === "string" && !CryptoUtils.isEncryptedData(value)) {
         hasPlaintextData = true;
         break;
@@ -5473,6 +4054,7 @@ var FeishuUploaderPlugin = class extends import_obsidian4.Plugin {
    * @returns 按原文档位置排序的图片信息数组
    */
   collectAllImageInfos(content) {
+    var _a;
     const allImages = [];
     if (MermaidConverter.hasMermaidCharts(content)) {
       const mermaidInfos = MermaidConverter.extractMermaidCharts(content);
@@ -5497,36 +4079,41 @@ var FeishuUploaderPlugin = class extends import_obsidian4.Plugin {
     let match;
     while ((match = obsidianImageRegex.exec(content)) !== null) {
       const fileName = match[1];
+      if (!fileName) {
+        continue;
+      }
+      const info = {
+        fileName,
+        path: fileName,
+        originalSyntax: "obsidian"
+      };
       allImages.push({
         type: "regular",
         position: match.index,
-        info: {
-          fileName,
-          path: fileName,
-          originalSyntax: "obsidian"
-        },
+        info,
         originalMatch: match[0]
       });
     }
-    const markdownImageRegex = /!\[([^\]]*)\]\(([^\)\s]+)(?:\s+"([^"]*)")?\)/g;
+    const markdownImageRegex = /!\[([^\]]*)\]\(([^)\s]+)(?:\s+"([^"]*)")?\)/g;
     while ((match = markdownImageRegex.exec(content)) !== null) {
-      const alt = match[1];
+      const alt = (_a = match[1]) != null ? _a : "";
       const path = match[2];
       const title = match[3];
       if (!path)
         continue;
       const decodedPath = decodeURI(path);
       const fileName = decodedPath.split("/").pop() || decodedPath;
+      const info = {
+        fileName,
+        path: decodedPath,
+        alt,
+        originalSyntax: "markdown",
+        ...title !== void 0 ? { title } : {}
+      };
       allImages.push({
         type: "regular",
         position: match.index,
-        info: {
-          fileName,
-          path: decodedPath,
-          alt,
-          title,
-          originalSyntax: "markdown"
-        },
+        info,
         originalMatch: match[0]
       });
     }
@@ -5569,8 +4156,7 @@ var FeishuUploaderPlugin = class extends import_obsidian4.Plugin {
     }
     let content = await this.app.vault.read(file);
     const title = file.basename;
-    const willUseSmartUpdate = !!(this.smartUpdateManager && this.smartUpdateManager.shouldUseSmartUpdate(title, this.settings.uploadHistory, this.settings.enableSmartUpdate));
-    const progressModal = new UploadProgressModal(this.app, willUseSmartUpdate);
+    const progressModal = new UploadProgressModal(this.app);
     progressModal.open();
     try {
       progressModal.updateProgress(5, "\u6B63\u5728\u8BFB\u53D6\u6587\u6863\u5185\u5BB9...");
@@ -5679,49 +4265,8 @@ var FeishuUploaderPlugin = class extends import_obsidian4.Plugin {
           }
         }
       }
-      let result;
-      let isSmartUpdate = false;
-      if (this.smartUpdateManager && this.smartUpdateManager.shouldUseSmartUpdate(title, this.settings.uploadHistory, this.settings.enableSmartUpdate, content)) {
-        progressModal.updateTitle(true);
-        progressModal.updateProgress(55, "\u68C0\u6D4B\u5230\u5DF2\u5B58\u5728\u6587\u6863\uFF0C\u6B63\u5728\u6267\u884C\u589E\u91CF\u66F4\u65B0...");
-        try {
-          const smartUpdateResult = await this.smartUpdateManager.performSmartUpdate(
-            title,
-            content,
-            this.settings.uploadHistory,
-            (status) => {
-              progressModal.updateProgress(57, status);
-            },
-            orderedImageInfos,
-            void 0
-          );
-          if (smartUpdateResult.success) {
-            result = {
-              token: smartUpdateResult.documentId,
-              url: smartUpdateResult.url
-            };
-            isSmartUpdate = true;
-            progressModal.updateProgress(60, "\u6587\u6863\u66F4\u65B0\u6210\u529F\uFF01");
-          } else {
-            console.warn("[\u667A\u80FD\u66F4\u65B0] \u66F4\u65B0\u5931\u8D25\uFF0C\u56DE\u9000\u5230\u6B63\u5E38\u4E0A\u4F20:", smartUpdateResult.error);
-            progressModal.updateTitle(false);
-            progressModal.updateProgress(60, "\u66F4\u65B0\u5931\u8D25\uFF0C\u6B63\u5728\u521B\u5EFA\u65B0\u6587\u6863...");
-            result = await this.performNormalUpload(file, content, hasImages, orderedImageInfos, progressModal);
-          }
-        } catch (error) {
-          const errorMessage = error instanceof Error ? error.message : String(error);
-          console.error(`[\u667A\u80FD\u66F4\u65B0] \u66F4\u65B0\u51FA\u9519\uFF0C\u56DE\u9000\u5230\u6B63\u5E38\u4E0A\u4F20: ${errorMessage}`);
-          if (this.settings.debugLoggingEnabled) {
-            console.debug("[\u667A\u80FD\u66F4\u65B0] \u66F4\u65B0\u51FA\u9519\u8BE6\u60C5:", error);
-          }
-          progressModal.updateTitle(false);
-          progressModal.updateProgress(60, "\u66F4\u65B0\u51FA\u9519\uFF0C\u6B63\u5728\u521B\u5EFA\u65B0\u6587\u6863...");
-          result = await this.performNormalUpload(file, content, hasImages, orderedImageInfos, progressModal);
-        }
-      } else {
-        progressModal.updateProgress(55, "\u6B63\u5728\u4E0A\u4F20\u6587\u6863\u5230\u98DE\u4E66...");
-        result = await this.performNormalUpload(file, content, hasImages, orderedImageInfos, progressModal);
-      }
+      progressModal.updateProgress(55, "\u6B63\u5728\u4E0A\u4F20\u6587\u6863\u5230\u98DE\u4E66...");
+      const result = await this.performNormalUpload(file, content, hasImages, orderedImageInfos, progressModal);
       let processStep = 80;
       if (cachedYaml) {
         progressModal.updateProgress(processStep, "\u6B63\u5728\u5904\u7406\u6587\u6863\u4FE1\u606F\u5757...");
@@ -5734,35 +4279,27 @@ var FeishuUploaderPlugin = class extends import_obsidian4.Plugin {
         processStep = 90;
       }
       progressModal.updateProgress(95, "\u6B63\u5728\u4FDD\u5B58\u4E0A\u4F20\u8BB0\u5F55...");
-      if (isSmartUpdate) {
-        await this.updateHistoryTimestamp(result.token);
-      } else {
-        const referencedDocs = this.settings.enableDoubleLinkMode && linkProcessor && linkResult && linkResult.uploadResults.size > 0 ? Array.from(linkResult.uploadResults.values()).map((result2) => ({
-          title: result2.title,
-          docToken: result2.token,
-          url: result2.url
-        })) : void 0;
-        await this.addUploadHistory(title, result.url, result.token, void 0, referencedDocs);
-        if (this.settings.enableDoubleLinkMode && referencedDocs && referencedDocs.length > 0) {
-          for (const refDoc of referencedDocs) {
-            await this.addUploadHistory(
-              refDoc.title,
-              refDoc.url,
-              refDoc.docToken,
-              void 0,
-              void 0,
-              true
-              // 标识为引用文档
-            );
-          }
+      const referencedDocs = this.settings.enableDoubleLinkMode && linkProcessor && linkResult && linkResult.uploadResults.size > 0 ? Array.from(linkResult.uploadResults.values()).map((result2) => ({
+        title: result2.title,
+        docToken: result2.token,
+        url: result2.url
+      })) : void 0;
+      await this.addUploadHistory(title, result.url, result.token, void 0, referencedDocs);
+      if (this.settings.enableDoubleLinkMode && referencedDocs && referencedDocs.length > 0) {
+        for (const refDoc of referencedDocs) {
+          await this.addUploadHistory(
+            refDoc.title,
+            refDoc.url,
+            refDoc.docToken,
+            void 0,
+            void 0,
+            true
+            // 标识为引用文档
+          );
         }
       }
       progressModal.complete();
-      if (isSmartUpdate) {
-        new UploadResultModal(this.app, result.url, title, true).open();
-      } else {
-        new DocumentPermissionModal(this.app, result.token, result.url, title, this, false).open();
-      }
+      new DocumentPermissionModal(this.app, result.token, result.url, title, this, false).open();
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       console.error(`[\u98DE\u4E66\u63D2\u4EF6] \u4E0A\u4F20\u5931\u8D25: ${errorMessage}`);
@@ -5920,7 +4457,7 @@ var FeishuUploaderPlugin = class extends import_obsidian4.Plugin {
    */
   showRetryDialog(file) {
     const modal = new RetryModal(this.app, () => {
-      this.uploadFile(file);
+      void this.uploadFile(file);
     });
     modal.open();
   }
@@ -5942,7 +4479,7 @@ var FeishuUploaderPlugin = class extends import_obsidian4.Plugin {
     this.settings.uploadHistory.unshift(historyItem);
     this.settings.uploadCount++;
     const encryptedSettings = await CryptoUtils.encryptSensitiveSettings(this.settings);
-    this.saveData(encryptedSettings);
+    await this.saveData(encryptedSettings);
   }
   /**
    * 更新历史记录中的权限设置
@@ -5952,11 +4489,11 @@ var FeishuUploaderPlugin = class extends import_obsidian4.Plugin {
     if (historyItem) {
       historyItem.permissions = permissions;
       const encryptedSettings = await CryptoUtils.encryptSensitiveSettings(this.settings);
-      this.saveData(encryptedSettings);
+      await this.saveData(encryptedSettings);
     }
   }
   /**
-   * 更新现有历史记录的时间戳（用于智能更新）
+   * 更新现有历史记录的时间戳
    */
   async updateHistoryTimestamp(docToken) {
     const historyItem = this.settings.uploadHistory.find((item) => item.docToken === docToken);
@@ -5970,7 +4507,7 @@ var FeishuUploaderPlugin = class extends import_obsidian4.Plugin {
         this.settings.uploadHistory.unshift(historyItem);
       }
       const encryptedSettings = await CryptoUtils.encryptSensitiveSettings(this.settings);
-      this.saveData(encryptedSettings);
+      await this.saveData(encryptedSettings);
     }
   }
   /**
@@ -5982,7 +4519,7 @@ var FeishuUploaderPlugin = class extends import_obsidian4.Plugin {
     if (index !== -1) {
       this.settings.uploadHistory.splice(index, 1);
       const encryptedSettings = await CryptoUtils.encryptSensitiveSettings(this.settings);
-      this.saveData(encryptedSettings);
+      await this.saveData(encryptedSettings);
     }
   }
   /**
@@ -6014,7 +4551,7 @@ var FeishuUploaderPlugin = class extends import_obsidian4.Plugin {
   async clearUploadHistory() {
     this.settings.uploadHistory = [];
     const encryptedSettings = await CryptoUtils.encryptSensitiveSettings(this.settings);
-    this.saveData(encryptedSettings);
+    await this.saveData(encryptedSettings);
     this.notificationManager.showNotice("\u5DF2\u6E05\u7A7A\u4E0A\u4F20\u5386\u53F2\u8BB0\u5F55", 3e3, "history-cleared");
   }
   /**
@@ -6023,7 +4560,7 @@ var FeishuUploaderPlugin = class extends import_obsidian4.Plugin {
   async resetUploadCount() {
     this.settings.uploadCount = 0;
     const encryptedSettings = await CryptoUtils.encryptSensitiveSettings(this.settings);
-    this.saveData(encryptedSettings);
+    await this.saveData(encryptedSettings);
     this.notificationManager.showNotice("\u5DF2\u91CD\u7F6E\u4E0A\u4F20\u6B21\u6570", 3e3, "count-reset");
   }
   /**
@@ -6033,7 +4570,7 @@ var FeishuUploaderPlugin = class extends import_obsidian4.Plugin {
     await this.checkAndResetApiCount();
     this.settings.apiCallCount++;
     const encryptedSettings = await CryptoUtils.encryptSensitiveSettings(this.settings);
-    this.saveData(encryptedSettings);
+    await this.saveData(encryptedSettings);
   }
   /**
    * 检查并重置API调用次数（每月1日北京时间自动重置）
@@ -6046,7 +4583,7 @@ var FeishuUploaderPlugin = class extends import_obsidian4.Plugin {
       this.settings.apiCallCount = 0;
       this.settings.lastResetDate = currentMonth;
       const encryptedSettings = await CryptoUtils.encryptSensitiveSettings(this.settings);
-      this.saveData(encryptedSettings);
+      await this.saveData(encryptedSettings);
     }
   }
   /**
@@ -6058,7 +4595,7 @@ var FeishuUploaderPlugin = class extends import_obsidian4.Plugin {
     const beijingTime = new Date(now.getTime() + 8 * 60 * 60 * 1e3);
     this.settings.lastResetDate = beijingTime.toISOString().substring(0, 7);
     const encryptedSettings = await CryptoUtils.encryptSensitiveSettings(this.settings);
-    this.saveData(encryptedSettings);
+    await this.saveData(encryptedSettings);
     this.notificationManager.showNotice("\u5DF2\u91CD\u7F6EAPI\u8C03\u7528\u6B21\u6570", 3e3, "api-count-reset");
   }
   /**
@@ -6071,7 +4608,13 @@ var FeishuUploaderPlugin = class extends import_obsidian4.Plugin {
         return false;
       }
       const result = await this.feishuClient.testConnection();
-      this.incrementApiCallCount();
+      void this.incrementApiCallCount().catch((error) => {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        console.error(`[\u98DE\u4E66\u63D2\u4EF6] API\u8C03\u7528\u8BA1\u6570\u66F4\u65B0\u5931\u8D25: ${errorMessage}`);
+        if (this.settings.debugLoggingEnabled) {
+          console.debug("[\u98DE\u4E66\u63D2\u4EF6] API\u8C03\u7528\u8BA1\u6570\u66F4\u65B0\u5931\u8D25\u8BE6\u60C5:", error);
+        }
+      });
       return result;
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
@@ -6099,7 +4642,7 @@ var DocumentPermissionModal = class extends import_obsidian4.Modal {
     const { contentEl } = this;
     contentEl.empty();
     contentEl.addClass("obshare-feishu-permission-modal");
-    contentEl.createEl("h2", { text: "\u8BBE\u7F6E\u6587\u6863\u6743\u9650" });
+    new import_obsidian4.Setting(contentEl).setName("\u8BBE\u7F6E\u6587\u6863\u6743\u9650").setHeading();
     contentEl.createEl("p", { text: `\u4E3A\u6587\u6863 "${this.title}" \u8BBE\u7F6E\u8BBF\u95EE\u6743\u9650` });
     const permissionContainer = contentEl.createDiv("obshare-permission-options");
     const publicOption = permissionContainer.createDiv("obshare-permission-option");
@@ -6172,54 +4715,56 @@ var DocumentPermissionModal = class extends import_obsidian4.Modal {
     updateOptionStates();
     const buttonContainer = contentEl.createDiv("obshare-modal-button-container");
     const submitButton = buttonContainer.createEl("button", { text: "\u63D0\u4EA4\u8BBE\u7F6E", cls: "mod-cta" });
-    submitButton.onclick = async () => {
-      const isPublic = publicCheckbox.checked;
-      const allowCopy = copyCheckbox.checked;
-      const allowCreateCopy = copyCreateCheckbox.checked;
-      const permissions = {
-        isPublic,
-        allowCopy,
-        allowCreateCopy,
-        allowPrintDownload: allowCreateCopy,
-        // 新增参数：根据用户选择设置特殊权限
-        copyEntity: allowCopy ? "anyone_can_view" : "only_full_access",
-        securityEntity: allowCreateCopy ? "anyone_can_view" : "only_full_access"
-      };
-      submitButton.disabled = true;
-      submitButton.textContent = "\u8BBE\u7F6E\u4E2D...";
-      try {
-        if (!this.plugin.settings.userId) {
-          throw new Error("\u8BF7\u5148\u5728\u8BBE\u7F6E\u4E2D\u914D\u7F6E\u60A8\u7684\u98DE\u4E66\u7528\u6237ID");
-        }
-        if (this.isFromSettings) {
-          await this.plugin.feishuClient.updateDocumentPermissionsOnly(this.docToken, permissions);
-        } else {
-          await this.plugin.feishuClient.setDocumentPermissions(this.docToken, permissions, this.plugin.settings.userId);
-          await this.applyPermissionsToReferencedDocuments(permissions, this.plugin.settings.userId);
-        }
-        const permissionsToSave = {
+    submitButton.onclick = () => {
+      void (async () => {
+        const isPublic = publicCheckbox.checked;
+        const allowCopy = copyCheckbox.checked;
+        const allowCreateCopy = copyCreateCheckbox.checked;
+        const permissions = {
           isPublic,
           allowCopy,
-          allowCreateCopy
+          allowCreateCopy,
+          allowPrintDownload: allowCreateCopy,
+          // 新增参数：根据用户选择设置特殊权限
+          copyEntity: allowCopy ? "anyone_can_view" : "only_full_access",
+          securityEntity: allowCreateCopy ? "anyone_can_view" : "only_full_access"
         };
-        this.forceClose();
-        if (!this.isFromSettings) {
-          this.plugin.updateHistoryPermissions(this.docToken, permissionsToSave);
-          new UploadResultModal(this.app, this.docUrl, this.title).open();
-        } else {
-          this.plugin.updateHistoryPermissions(this.docToken, permissionsToSave);
-          this.plugin.notificationManager.showNotice("\u6587\u6863\u6743\u9650\u8BBE\u7F6E\u6210\u529F", 3e3);
+        submitButton.disabled = true;
+        submitButton.textContent = "\u8BBE\u7F6E\u4E2D...";
+        try {
+          if (!this.plugin.settings.userId) {
+            throw new Error("\u8BF7\u5148\u5728\u8BBE\u7F6E\u4E2D\u914D\u7F6E\u60A8\u7684\u98DE\u4E66\u7528\u6237ID");
+          }
+          if (this.isFromSettings) {
+            await this.plugin.feishuClient.updateDocumentPermissionsOnly(this.docToken, permissions);
+          } else {
+            await this.plugin.feishuClient.setDocumentPermissions(this.docToken, permissions, this.plugin.settings.userId);
+            await this.applyPermissionsToReferencedDocuments(permissions, this.plugin.settings.userId);
+          }
+          const permissionsToSave = {
+            isPublic,
+            allowCopy,
+            allowCreateCopy
+          };
+          this.forceClose();
+          if (!this.isFromSettings) {
+            this.plugin.updateHistoryPermissions(this.docToken, permissionsToSave);
+            new UploadResultModal(this.app, this.docUrl, this.title).open();
+          } else {
+            this.plugin.updateHistoryPermissions(this.docToken, permissionsToSave);
+            this.plugin.notificationManager.showNotice("\u6587\u6863\u6743\u9650\u8BBE\u7F6E\u6210\u529F", 3e3);
+          }
+        } catch (error) {
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          console.error(`[\u98DE\u4E66\u63D2\u4EF6] \u6743\u9650\u8BBE\u7F6E\u5931\u8D25: ${errorMessage}`);
+          if (this.plugin.settings.debugLoggingEnabled) {
+            console.debug("[\u98DE\u4E66\u63D2\u4EF6] \u6743\u9650\u8BBE\u7F6E\u5931\u8D25\u8BE6\u60C5:", error);
+          }
+          this.plugin.notificationManager.showNotice(`\u6743\u9650\u8BBE\u7F6E\u5931\u8D25: ${errorMessage}`, 5e3, "permission-error");
+          submitButton.disabled = false;
+          submitButton.textContent = "\u63D0\u4EA4\u8BBE\u7F6E";
         }
-      } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : String(error);
-        console.error(`[\u98DE\u4E66\u63D2\u4EF6] \u6743\u9650\u8BBE\u7F6E\u5931\u8D25: ${errorMessage}`);
-        if (this.plugin.settings.debugLoggingEnabled) {
-          console.debug("[\u98DE\u4E66\u63D2\u4EF6] \u6743\u9650\u8BBE\u7F6E\u5931\u8D25\u8BE6\u60C5:", error);
-        }
-        this.plugin.notificationManager.showNotice(`\u6743\u9650\u8BBE\u7F6E\u5931\u8D25: ${errorMessage}`, 5e3, "permission-error");
-        submitButton.disabled = false;
-        submitButton.textContent = "\u63D0\u4EA4\u8BBE\u7F6E";
-      }
+      })();
     };
   }
   onClose() {
@@ -6283,21 +4828,18 @@ var DocumentPermissionModal = class extends import_obsidian4.Modal {
    */
 };
 var UploadResultModal = class extends import_obsidian4.Modal {
-  // 是否为智能更新
-  constructor(app, url, title, isSmartUpdate = false) {
+  constructor(app, url, title) {
     super(app);
-    this.isSmartUpdate = false;
     this.url = url;
     this.title = title;
-    this.isSmartUpdate = isSmartUpdate;
   }
   onOpen() {
     const { contentEl } = this;
     contentEl.empty();
     contentEl.addClass("obshare-feishu-success-modal");
-    const successTitle = this.isSmartUpdate ? "\u66F4\u65B0\u6210\u529F\uFF01" : "\u4E0A\u4F20\u6210\u529F\uFF01";
-    const successMessage = this.isSmartUpdate ? `\u6587\u6863 "${this.title}" \u5DF2\u6210\u529F\u66F4\u65B0\u5230\u98DE\u4E66\u4E91\u6587\u6863` : `\u6587\u6863 "${this.title}" \u5DF2\u6210\u529F\u4E0A\u4F20\u5230\u98DE\u4E66\u4E91\u6587\u6863`;
-    contentEl.createEl("h2", { text: successTitle });
+    const successTitle = "\u4E0A\u4F20\u6210\u529F\uFF01";
+    const successMessage = `\u6587\u6863 "${this.title}" \u5DF2\u6210\u529F\u4E0A\u4F20\u5230\u98DE\u4E66\u4E91\u6587\u6863`;
+    new import_obsidian4.Setting(contentEl).setName(successTitle).setHeading();
     contentEl.createEl("p", { text: successMessage });
     const linkEl = contentEl.createEl("a", {
       text: this.url,
@@ -6307,8 +4849,11 @@ var UploadResultModal = class extends import_obsidian4.Modal {
     const buttonContainer = contentEl.createDiv("obshare-modal-button-container");
     const copyButton = buttonContainer.createEl("button", { text: "\u590D\u5236\u94FE\u63A5" });
     copyButton.onclick = () => {
-      navigator.clipboard.writeText(this.url);
-      new import_obsidian4.Notice("\u94FE\u63A5\u5DF2\u590D\u5236\u5230\u526A\u8D34\u677F");
+      void navigator.clipboard.writeText(this.url).then(() => {
+        new import_obsidian4.Notice("\u94FE\u63A5\u5DF2\u590D\u5236\u5230\u526A\u8D34\u677F");
+      }).catch(() => {
+        new import_obsidian4.Notice("\u590D\u5236\u5931\u8D25\uFF0C\u8BF7\u624B\u52A8\u590D\u5236\u94FE\u63A5");
+      });
     };
     const openButton = buttonContainer.createEl("button", { text: "\u6253\u5F00\u6587\u6863" });
     openButton.onclick = () => {
@@ -6332,7 +4877,7 @@ var RetryModal = class extends import_obsidian4.Modal {
   onOpen() {
     const { contentEl } = this;
     contentEl.empty();
-    contentEl.createEl("h2", { text: "\u7F51\u7EDC\u8FDE\u63A5\u5931\u8D25" });
+    new import_obsidian4.Setting(contentEl).setName("\u7F51\u7EDC\u8FDE\u63A5\u5931\u8D25").setHeading();
     const descEl = contentEl.createEl("div", { cls: "retry-modal-desc" });
     descEl.createEl("p", { text: "\u4E0A\u4F20\u5931\u8D25\uFF0C\u53EF\u80FD\u662F\u7F51\u7EDC\u8FDE\u63A5\u95EE\u9898\u3002" });
     descEl.createEl("p", { text: "\u8BF7\u68C0\u67E5\u7F51\u7EDC\u8FDE\u63A5\u540E\u91CD\u8BD5\uFF0C\u6216\u7A0D\u540E\u518D\u8BD5\u3002" });
@@ -6402,43 +4947,39 @@ var FeishuUploaderSettingTab = class extends import_obsidian4.PluginSettingTab {
     const { containerEl } = this;
     containerEl.empty();
     const headerContainer = containerEl.createDiv({ cls: "obshare-header-container" });
-    headerContainer.style.marginBottom = "20px";
-    const titleRow = headerContainer.createDiv({ cls: "obshare-title-row" });
-    titleRow.style.display = "flex";
-    titleRow.style.alignItems = "center";
-    titleRow.style.justifyContent = "space-between";
-    titleRow.style.marginBottom = "10px";
-    const title = titleRow.createEl("h1", { text: "\u57FA\u7840\u8BBE\u7F6E" });
-    title.style.marginBottom = "0";
+    const headerSetting = new import_obsidian4.Setting(headerContainer).setName("\u57FA\u7840\u8BBE\u7F6E").setHeading();
+    headerSetting.nameEl.empty();
+    const titleRow = headerSetting.nameEl.createDiv({ cls: "obshare-title-row" });
+    titleRow.createSpan({ text: "\u57FA\u7840\u8BBE\u7F6E", cls: "obshare-settings-title" });
     const githubLink = titleRow.createEl("a", {
       href: "https://github.com/xigua222/ObShare",
       cls: "obshare-github-link"
     });
     githubLink.setAttribute("target", "_blank");
-    githubLink.style.display = "flex";
-    githubLink.style.alignItems = "center";
-    githubLink.style.gap = "6px";
-    githubLink.style.textDecoration = "none";
-    githubLink.style.color = "var(--text-normal)";
-    githubLink.style.padding = "4px 8px";
-    githubLink.style.borderRadius = "4px";
-    githubLink.style.border = "1px solid var(--background-modifier-border)";
-    githubLink.style.backgroundColor = "var(--background-primary)";
-    githubLink.style.fontSize = "14px";
-    const iconSpan = githubLink.createSpan();
-    iconSpan.style.display = "flex";
-    iconSpan.style.alignItems = "center";
-    iconSpan.innerHTML = `<svg width="16" height="16" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg"><path fill-rule="evenodd" clip-rule="evenodd" d="M24 4C12.9543 4 4 12.9543 4 24C4 35.0457 12.9543 44 24 44C35.0457 44 44 35.0457 44 24C44 12.9543 35.0457 4 24 4ZM0 24C0 10.7452 10.7452 0 24 0C37.2548 0 48 10.7452 48 24C48 37.2548 37.2548 48 24 48C10.7452 48 0 37.2548 0 24Z" fill="currentColor"/><path fill-rule="evenodd" clip-rule="evenodd" d="M19.1833 45.4716C18.9898 45.2219 18.9898 42.9973 19.1833 38.798C17.1114 38.8696 15.8024 38.7258 15.2563 38.3667C14.437 37.828 13.6169 36.1667 12.8891 34.9959C12.1614 33.8251 10.5463 33.64 9.89405 33.3783C9.24182 33.1165 9.07809 32.0496 11.6913 32.8565C14.3044 33.6634 14.4319 35.8607 15.2563 36.3745C16.0806 36.8883 18.0515 36.6635 18.9448 36.2519C19.8382 35.8403 19.7724 34.3078 19.9317 33.7007C20.1331 33.134 19.4233 33.0083 19.4077 33.0037C18.5355 33.0037 13.9539 32.0073 12.6955 27.5706C11.437 23.134 13.0581 20.2341 13.9229 18.9875C14.4995 18.1564 14.4485 16.3852 13.7699 13.6737C16.2335 13.3589 18.1347 14.1343 19.4734 16.0001C19.4747 16.0108 21.2285 14.9572 24.0003 14.9572C26.772 14.9572 27.7553 15.8154 28.5142 16.0001C29.2731 16.1848 29.88 12.7341 34.5668 13.6737C33.5883 15.5969 32.7689 18.0001 33.3943 18.9875C34.0198 19.9749 36.4745 23.1147 34.9666 27.5706C33.9614 30.5413 31.9853 32.3523 29.0384 33.0037C28.7005 33.1115 28.5315 33.2855 28.5315 33.5255C28.5315 33.8856 28.9884 33.9249 29.6465 35.6117C30.0853 36.7362 30.117 39.948 29.7416 45.247C28.7906 45.4891 28.0508 45.6516 27.5221 45.7347C26.5847 45.882 25.5669 45.9646 24.5669 45.9965C23.5669 46.0284 23.2196 46.0248 21.837 45.8961C20.9154 45.8103 20.0308 45.6688 19.1833 45.4716Z" fill="currentColor"/></svg>`;
+    const iconSpan = githubLink.createSpan({ cls: "obshare-github-link-icon" });
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("width", "16");
+    svg.setAttribute("height", "16");
+    svg.setAttribute("viewBox", "0 0 48 48");
+    svg.setAttribute("fill", "none");
+    const pathOuter = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    pathOuter.setAttribute("fill-rule", "evenodd");
+    pathOuter.setAttribute("clip-rule", "evenodd");
+    pathOuter.setAttribute("d", "M24 4C12.9543 4 4 12.9543 4 24C4 35.0457 12.9543 44 24 44C35.0457 44 44 35.0457 44 24C44 12.9543 35.0457 4 24 4ZM0 24C0 10.7452 10.7452 0 24 0C37.2548 0 48 10.7452 48 24C48 37.2548 37.2548 48 24 48C10.7452 48 0 37.2548 0 24Z");
+    pathOuter.setAttribute("fill", "currentColor");
+    const pathInner = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    pathInner.setAttribute("fill-rule", "evenodd");
+    pathInner.setAttribute("clip-rule", "evenodd");
+    pathInner.setAttribute("d", "M19.1833 45.4716C18.9898 45.2219 18.9898 42.9973 19.1833 38.798C17.1114 38.8696 15.8024 38.7258 15.2563 38.3667C14.437 37.828 13.6169 36.1667 12.8891 34.9959C12.1614 33.8251 10.5463 33.64 9.89405 33.3783C9.24182 33.1165 9.07809 32.0496 11.6913 32.8565C14.3044 33.6634 14.4319 35.8607 15.2563 36.3745C16.0806 36.8883 18.0515 36.6635 18.9448 36.2519C19.8382 35.8403 19.7724 34.3078 19.9317 33.7007C20.1331 33.134 19.4233 33.0083 19.4077 33.0037C18.5355 33.0037 13.9539 32.0073 12.6955 27.5706C11.437 23.134 13.0581 20.2341 13.9229 18.9875C14.4995 18.1564 14.4485 16.3852 13.7699 13.6737C16.2335 13.3589 18.1347 14.1343 19.4734 16.0001C19.4747 16.0108 21.2285 14.9572 24.0003 14.9572C26.772 14.9572 27.7553 15.8154 28.5142 16.0001C29.2731 16.1848 29.88 12.7341 34.5668 13.6737C33.5883 15.5969 32.7689 18.0001 33.3943 18.9875C34.0198 19.9749 36.4745 23.1147 34.9666 27.5706C33.9614 30.5413 31.9853 32.3523 29.0384 33.0037C28.7005 33.1115 28.5315 33.2855 28.5315 33.5255C28.5315 33.8856 28.9884 33.9249 29.6465 35.6117C30.0853 36.7362 30.117 39.948 29.7416 45.247C28.7906 45.4891 28.0508 45.6516 27.5221 45.7347C26.5847 45.882 25.5669 45.9646 24.5669 45.9965C23.5669 46.0284 23.2196 46.0248 21.837 45.8961C20.9154 45.8103 20.0308 45.6688 19.1833 45.4716Z");
+    pathInner.setAttribute("fill", "currentColor");
+    svg.appendChild(pathOuter);
+    svg.appendChild(pathInner);
+    iconSpan.appendChild(svg);
     githubLink.createSpan({ text: "Star on GitHub" });
     const encourageText = headerContainer.createEl("div", {
       text: "\u63D2\u4EF6\u5B8C\u5168\u514D\u8D39\u5F00\u6E90\uFF0C\u5982\u679C\u60A8\u559C\u6B22\u8FD9\u4E2A\u63D2\u4EF6\uFF0C\u6073\u8BF7\u5E2E\u5FD9\u70B9\u4E2A star\uFF0C\u8FD9\u4F1A\u662F\u5BF9\u4F5C\u8005\u6781\u5927\u7684\u9F13\u52B1~",
       cls: "obshare-encourage-text"
     });
-    encourageText.style.color = "var(--text-muted)";
-    encourageText.style.fontSize = "12px";
-    encourageText.style.textAlign = "right";
-    encourageText.style.marginTop = "0px";
-    encourageText.style.marginBottom = "10px";
     const descEl = containerEl.createDiv();
     descEl.createEl("p", { text: "\u4F60\u9700\u8981\u914D\u7F6E\u98DE\u4E66\u5E94\u7528App ID\u3001App secret\u3001\u60A8\u7684\u98DE\u4E66\u7528\u6237ID\u3001\u60A8\u7684\u6587\u4EF6\u5939token\u624D\u80FD\u6B63\u5E38\u542F\u52A8\u6B64\u63D2\u4EF6" });
     const docLinkP = descEl.createEl("p");
@@ -6448,69 +4989,71 @@ var FeishuUploaderSettingTab = class extends import_obsidian4.PluginSettingTab {
       href: "https://itlueqqx8t.feishu.cn/docx/XUJmdxbf7octOFx3Vt0c3KJ3nWe"
     });
     docLink.setAttribute("target", "_blank");
-    const appIdSetting = new import_obsidian4.Setting(containerEl).setName("App ID").setDesc("\u98DE\u4E66\u5E94\u7528\u7684App ID").addText((text) => text.setPlaceholder("\u8F93\u5165App ID").setValue(this.plugin.settings.appId).onChange(async (value) => {
+    const appIdSetting = new import_obsidian4.Setting(containerEl).setName("App ID").setDesc("\u98DE\u4E66\u5E94\u7528\u7684App ID").addText((text) => text.setPlaceholder("\u8F93\u5165App ID").setValue(this.plugin.settings.appId).onChange((value) => {
       this.plugin.settings.appId = value;
-      await this.plugin.saveSettings();
+      void this.plugin.saveSettings();
     }));
     appIdSetting.nameEl.empty();
     appIdSetting.nameEl.createSpan({ text: "App ID " });
     appIdSetting.nameEl.createSpan({ text: "*", cls: "obshare-required-field" });
-    const appSecretSetting = new import_obsidian4.Setting(containerEl).setName("App Secret").setDesc("\u98DE\u4E66\u5E94\u7528\u7684App Secret").addText((text) => text.setPlaceholder("\u8F93\u5165App Secret").setValue(this.plugin.settings.appSecret).onChange(async (value) => {
+    const appSecretSetting = new import_obsidian4.Setting(containerEl).setName("App Secret").setDesc("\u98DE\u4E66\u5E94\u7528\u7684App Secret").addText((text) => text.setPlaceholder("\u8F93\u5165App Secret").setValue(this.plugin.settings.appSecret).onChange((value) => {
       this.plugin.settings.appSecret = value;
-      await this.plugin.saveSettings();
+      void this.plugin.saveSettings();
     }));
     appSecretSetting.nameEl.empty();
     appSecretSetting.nameEl.createSpan({ text: "App Secret " });
     appSecretSetting.nameEl.createSpan({ text: "*", cls: "obshare-required-field" });
-    const userIdSetting = new import_obsidian4.Setting(containerEl).setName("\u7528\u6237ID").setDesc("\u60A8\u7684\u98DE\u4E66\u7528\u6237ID").addText((text) => text.setPlaceholder("\u8F93\u5165\u60A8\u7684\u98DE\u4E66\u7528\u6237ID").setValue(this.plugin.settings.userId).onChange(async (value) => {
+    const userIdSetting = new import_obsidian4.Setting(containerEl).setName("\u7528\u6237ID").setDesc("\u60A8\u7684\u98DE\u4E66\u7528\u6237ID").addText((text) => text.setPlaceholder("\u8F93\u5165\u60A8\u7684\u98DE\u4E66\u7528\u6237ID").setValue(this.plugin.settings.userId).onChange((value) => {
       this.plugin.settings.userId = value;
-      await this.plugin.saveSettings();
+      void this.plugin.saveSettings();
     }));
     userIdSetting.nameEl.empty();
     userIdSetting.nameEl.createSpan({ text: "\u7528\u6237ID " });
     userIdSetting.nameEl.createSpan({ text: "*", cls: "obshare-required-field" });
-    const folderTokenSetting = new import_obsidian4.Setting(containerEl).setName("\u6587\u4EF6\u5939Token").setDesc("\u98DE\u4E66\u4E91\u7A7A\u95F4\u6587\u4EF6\u5939\u7684Token\uFF0C\u6587\u6863\u5C06\u4E0A\u4F20\u5230\u6B64\u6587\u4EF6\u5939").addText((text) => text.setPlaceholder("\u8F93\u5165\u6587\u4EF6\u5939Token").setValue(this.plugin.settings.folderToken).onChange(async (value) => {
+    const folderTokenSetting = new import_obsidian4.Setting(containerEl).setName("\u6587\u4EF6\u5939Token").setDesc("\u98DE\u4E66\u4E91\u7A7A\u95F4\u6587\u4EF6\u5939\u7684Token\uFF0C\u6587\u6863\u5C06\u4E0A\u4F20\u5230\u6B64\u6587\u4EF6\u5939").addText((text) => text.setPlaceholder("\u8F93\u5165\u6587\u4EF6\u5939Token").setValue(this.plugin.settings.folderToken).onChange((value) => {
       this.plugin.settings.folderToken = value;
-      await this.plugin.saveSettings();
+      void this.plugin.saveSettings();
     }));
     folderTokenSetting.nameEl.empty();
     folderTokenSetting.nameEl.createSpan({ text: "\u6587\u4EF6\u5939Token " });
     folderTokenSetting.nameEl.createSpan({ text: "*", cls: "obshare-required-field" });
-    containerEl.createEl("h1", { text: "\u4E0A\u4F20\u8BBE\u7F6E" });
-    new import_obsidian4.Setting(containerEl).setName("\u53CC\u94FE\u6A21\u5F0F").setDesc("\u53CC\u94FE\u6A21\u5F0F\u53EF\u4EE5\u81EA\u52A8\u5E2E\u4F60\u4E0A\u4F20\u6587\u6863\u5185\u6240\u6709[[]]\u5F15\u7528\u7684\u6587\u6863\uFF0C\u81EA\u52A8\u5EFA\u7ACB\u94FE\u63A5\uFF0C\u4F7F\u5F97\u60A8\u7684\u5206\u4EAB\u66F4\u52A0\u4FBF\u6377\u5B8C\u6574\uFF0C\u4F46\u5728\u5F15\u7528\u6587\u6863\u6570\u91CF\u591A\u7684\u60C5\u51B5\u4E0B\uFF0C\u53EF\u80FD\u4F7F\u4E0A\u4F20\u901F\u5EA6\u53D8\u6162\uFF0C\u9700\u8981\u7B49\u5F85\u66F4\u4E45\u3002").addToggle((toggle) => toggle.setValue(this.plugin.settings.enableDoubleLinkMode).onChange(async (value) => {
+    new import_obsidian4.Setting(containerEl).setName("\u4E0A\u4F20\u8BBE\u7F6E").setHeading();
+    new import_obsidian4.Setting(containerEl).setName("\u53CC\u94FE\u6A21\u5F0F").setDesc("\u53CC\u94FE\u6A21\u5F0F\u53EF\u4EE5\u81EA\u52A8\u5E2E\u4F60\u4E0A\u4F20\u6587\u6863\u5185\u6240\u6709[[]]\u5F15\u7528\u7684\u6587\u6863\uFF0C\u81EA\u52A8\u5EFA\u7ACB\u94FE\u63A5\uFF0C\u4F7F\u5F97\u60A8\u7684\u5206\u4EAB\u66F4\u52A0\u4FBF\u6377\u5B8C\u6574\uFF0C\u4F46\u5728\u5F15\u7528\u6587\u6863\u6570\u91CF\u591A\u7684\u60C5\u51B5\u4E0B\uFF0C\u53EF\u80FD\u4F7F\u4E0A\u4F20\u901F\u5EA6\u53D8\u6162\uFF0C\u9700\u8981\u7B49\u5F85\u66F4\u4E45\u3002").addToggle((toggle) => toggle.setValue(this.plugin.settings.enableDoubleLinkMode).onChange((value) => {
       this.plugin.settings.enableDoubleLinkMode = value;
-      await this.plugin.saveSettings();
+      void this.plugin.saveSettings();
     }));
-    new import_obsidian4.Setting(containerEl).setName("\u8C03\u8BD5\u65E5\u5FD7").setDesc("\u542F\u7528\u540E\u4F1A\u5728\u5F00\u53D1\u8005\u63A7\u5236\u53F0\u8F93\u51FA\u8C03\u8BD5\u4FE1\u606F\uFF0C\u7528\u4E8E\u6392\u67E5\u95EE\u9898\u3002").addToggle((toggle) => toggle.setValue(this.plugin.settings.debugLoggingEnabled).onChange(async (value) => {
+    new import_obsidian4.Setting(containerEl).setName("\u8C03\u8BD5\u65E5\u5FD7").setDesc("\u542F\u7528\u540E\u4F1A\u5728\u5F00\u53D1\u8005\u63A7\u5236\u53F0\u8F93\u51FA\u8C03\u8BD5\u4FE1\u606F\uFF0C\u7528\u4E8E\u6392\u67E5\u95EE\u9898\u3002").addToggle((toggle) => toggle.setValue(this.plugin.settings.debugLoggingEnabled).onChange((value) => {
       this.plugin.settings.debugLoggingEnabled = value;
       this.plugin.applyDebugLoggingSetting();
-      await this.plugin.saveSettings();
+      void this.plugin.saveSettings();
     }));
-    new import_obsidian4.Setting(containerEl).setName("\u6D4B\u8BD5\u8FDE\u63A5").setDesc("\u6D4B\u8BD5\u98DE\u4E66API\u8FDE\u63A5\u662F\u5426\u6B63\u5E38").addButton((button) => button.setButtonText("\u6D4B\u8BD5\u8FDE\u63A5").onClick(async () => {
-      if (!this.plugin.feishuClient) {
-        this.plugin.notificationManager.showNotice("\u8BF7\u5148\u914D\u7F6EApp ID\u548CApp Secret", 4e3, "missing-config");
-        return;
-      }
-      try {
-        button.setButtonText("\u6D4B\u8BD5\u4E2D...");
-        const success = await this.plugin.testNetworkConnection();
-        if (success) {
-          this.plugin.notificationManager.showNotice("\u7F51\u7EDC\u8FDE\u63A5\u6D4B\u8BD5\u6210\u529F\uFF01", 3e3, "test-success");
-        } else {
-          new import_obsidian4.Notice("\u7F51\u7EDC\u8FDE\u63A5\u6D4B\u8BD5\u5931\u8D25\uFF0C\u8BF7\u68C0\u67E5\u7F51\u7EDC\u548C\u914D\u7F6E");
+    new import_obsidian4.Setting(containerEl).setName("\u6D4B\u8BD5\u8FDE\u63A5").setDesc("\u6D4B\u8BD5\u98DE\u4E66API\u8FDE\u63A5\u662F\u5426\u6B63\u5E38").addButton((button) => button.setButtonText("\u6D4B\u8BD5\u8FDE\u63A5").onClick(() => {
+      void (async () => {
+        if (!this.plugin.feishuClient) {
+          this.plugin.notificationManager.showNotice("\u8BF7\u5148\u914D\u7F6EApp ID\u548CApp Secret", 4e3, "missing-config");
+          return;
         }
-      } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : String(error);
-        if (errorMessage.includes("\u7F51\u7EDC\u8FDE\u63A5\u5931\u8D25")) {
-          new import_obsidian4.Notice("\u7F51\u7EDC\u8FDE\u63A5\u5931\u8D25\uFF0C\u8BF7\u68C0\u67E5\u7F51\u7EDC\u8FDE\u63A5\u540E\u91CD\u8BD5");
-        } else {
-          new import_obsidian4.Notice(`\u8FDE\u63A5\u6D4B\u8BD5\u5931\u8D25: ${errorMessage}`);
+        try {
+          button.setButtonText("\u6D4B\u8BD5\u4E2D...");
+          const success = await this.plugin.testNetworkConnection();
+          if (success) {
+            this.plugin.notificationManager.showNotice("\u7F51\u7EDC\u8FDE\u63A5\u6D4B\u8BD5\u6210\u529F\uFF01", 3e3, "test-success");
+          } else {
+            new import_obsidian4.Notice("\u7F51\u7EDC\u8FDE\u63A5\u6D4B\u8BD5\u5931\u8D25\uFF0C\u8BF7\u68C0\u67E5\u7F51\u7EDC\u548C\u914D\u7F6E");
+          }
+        } catch (error) {
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          if (errorMessage.includes("\u7F51\u7EDC\u8FDE\u63A5\u5931\u8D25")) {
+            new import_obsidian4.Notice("\u7F51\u7EDC\u8FDE\u63A5\u5931\u8D25\uFF0C\u8BF7\u68C0\u67E5\u7F51\u7EDC\u8FDE\u63A5\u540E\u91CD\u8BD5");
+          } else {
+            new import_obsidian4.Notice(`\u8FDE\u63A5\u6D4B\u8BD5\u5931\u8D25: ${errorMessage}`);
+          }
+        } finally {
+          button.setButtonText("\u6D4B\u8BD5\u8FDE\u63A5");
         }
-      } finally {
-        button.setButtonText("\u6D4B\u8BD5\u8FDE\u63A5");
-      }
+      })();
     }));
-    containerEl.createEl("h1", { text: "\u6570\u636E\u7EDF\u8BA1" });
+    new import_obsidian4.Setting(containerEl).setName("\u6570\u636E\u7EDF\u8BA1").setHeading();
     new import_obsidian4.Setting(containerEl).setName("\u5206\u4EAB\u6587\u6863\u6570").setDesc(`\u60A8\u5DF2\u6210\u529F\u5206\u4EAB ${this.plugin.settings.uploadCount} \u4E2A\u6587\u6863`).addButton((button) => button.setButtonText("\u91CD\u7F6E\u8BA1\u6570").setWarning().onClick(() => {
       this.plugin.resetUploadCount();
       this.display();
@@ -6522,7 +5065,7 @@ var FeishuUploaderSettingTab = class extends import_obsidian4.PluginSettingTab {
       this.plugin.resetApiCallCount();
       this.display();
     }));
-    containerEl.createEl("h1", { text: "\u5206\u4EAB\u7BA1\u7406" });
+    new import_obsidian4.Setting(containerEl).setName("\u5206\u4EAB\u7BA1\u7406").setHeading();
     if (this.plugin.settings.uploadHistory.length === 0) {
       containerEl.createEl("p", { text: "\u6682\u65E0\u4E0A\u4F20\u8BB0\u5F55", cls: "obshare-upload-history-empty" });
     } else {
@@ -6574,8 +5117,11 @@ var FeishuUploaderSettingTab = class extends import_obsidian4.PluginSettingTab {
             cls: "obshare-upload-history-copy-icon"
           });
           copyIcon.onclick = () => {
-            navigator.clipboard.writeText(item.url);
-            new import_obsidian4.Notice("\u94FE\u63A5\u5DF2\u590D\u5236\u5230\u526A\u8D34\u677F");
+            void navigator.clipboard.writeText(item.url).then(() => {
+              new import_obsidian4.Notice("\u94FE\u63A5\u5DF2\u590D\u5236\u5230\u526A\u8D34\u677F");
+            }).catch(() => {
+              new import_obsidian4.Notice("\u590D\u5236\u5931\u8D25\uFF0C\u8BF7\u624B\u52A8\u590D\u5236\u94FE\u63A5");
+            });
           };
           const permissionIcon = linkRowEl.createEl("span", {
             text: "\u8BBE\u7F6E",
@@ -6597,47 +5143,78 @@ var FeishuUploaderSettingTab = class extends import_obsidian4.PluginSettingTab {
             text: "\u5220\u9664",
             cls: "obshare-upload-history-copy-icon"
           });
-          deleteIcon.onclick = async () => {
-            const confirmed = confirm(`\u786E\u5B9A\u8981\u5220\u9664\u6587\u4EF6 "${item.title}" \u5417\uFF1F
+          deleteIcon.onclick = () => {
+            const modal = new DeleteConfirmationModal(
+              this.app,
+              `\u786E\u5B9A\u8981\u5220\u9664\u6587\u4EF6 "${item.title}" \u5417\uFF1F
 
-\u6CE8\u610F\uFF1A\u6B64\u64CD\u4F5C\u5C06\u5220\u9664\u98DE\u4E66\u4E91\u6587\u6863\u4E2D\u7684\u6587\u4EF6\uFF01`);
-            if (!confirmed) {
-              return;
-            }
-            await this.plugin.deleteHistoryItem(item.docToken);
-            this.display();
-            try {
-              if (this.plugin.feishuClient) {
-                await this.plugin.feishuClient.deleteFile(item.docToken);
-                await this.plugin.incrementApiCallCount();
+\u6CE8\u610F\uFF1A\u6B64\u64CD\u4F5C\u5C06\u5220\u9664\u98DE\u4E66\u4E91\u6587\u6863\u4E2D\u7684\u6587\u4EF6\uFF01`,
+              async () => {
+                await this.plugin.deleteHistoryItem(item.docToken);
+                this.display();
+                try {
+                  if (this.plugin.feishuClient) {
+                    await this.plugin.feishuClient.deleteFile(item.docToken);
+                    await this.plugin.incrementApiCallCount();
+                  }
+                } catch (error) {
+                  const errorMessage = error instanceof Error ? error.message : String(error);
+                  console.error(`[\u8BBE\u7F6E\u9875\u9762] API\u5220\u9664\u6587\u4EF6\u5931\u8D25: ${errorMessage}`);
+                  if (this.plugin.settings.debugLoggingEnabled) {
+                    console.debug("[\u8BBE\u7F6E\u9875\u9762] API\u5220\u9664\u6587\u4EF6\u5931\u8D25\u8BE6\u60C5:", error);
+                  }
+                  if (error instanceof Error && (error.message.includes("404") || error.message.includes("not found"))) {
+                    this.plugin.notificationManager.showNotice(
+                      "\u5220\u9664\u5931\u8D25\uFF0C\u8BF7\u60A8\u5728\u98DE\u4E66\u4E91\u6587\u6863\u4E2D\u81EA\u884C\u5C1D\u8BD5\u5220\u9664\u3002",
+                      5e3
+                    );
+                  } else {
+                    this.plugin.notificationManager.showNotice(
+                      "\u5220\u9664\u5931\u8D25\uFF0C\u8BF7\u60A8\u5728\u98DE\u4E66\u4E91\u6587\u6863\u4E2D\u81EA\u884C\u5C1D\u8BD5\u5220\u9664\u3002",
+                      5e3
+                    );
+                  }
+                }
               }
-            } catch (error) {
-              const errorMessage = error instanceof Error ? error.message : String(error);
-              console.error(`[\u8BBE\u7F6E\u9875\u9762] API\u5220\u9664\u6587\u4EF6\u5931\u8D25: ${errorMessage}`);
-              if (this.plugin.settings.debugLoggingEnabled) {
-                console.debug("[\u8BBE\u7F6E\u9875\u9762] API\u5220\u9664\u6587\u4EF6\u5931\u8D25\u8BE6\u60C5:", error);
-              }
-              if (error instanceof Error && (error.message.includes("404") || error.message.includes("not found"))) {
-                this.plugin.notificationManager.showNotice(
-                  "\u5220\u9664\u5931\u8D25\uFF0C\u8BF7\u60A8\u5728\u98DE\u4E66\u4E91\u6587\u6863\u4E2D\u81EA\u884C\u5C1D\u8BD5\u5220\u9664\u3002",
-                  5e3
-                );
-              } else {
-                this.plugin.notificationManager.showNotice(
-                  "\u5220\u9664\u5931\u8D25\uFF0C\u8BF7\u60A8\u5728\u98DE\u4E66\u4E91\u6587\u6863\u4E2D\u81EA\u884C\u5C1D\u8BD5\u5220\u9664\u3002",
-                  5e3
-                );
-              }
-            }
+            );
+            modal.open();
           };
         });
       });
     }
   }
 };
+var DeleteConfirmationModal = class extends import_obsidian4.Modal {
+  constructor(app, message, onConfirm) {
+    super(app);
+    this.message = message;
+    this.onConfirm = onConfirm;
+  }
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.empty();
+    new import_obsidian4.Setting(contentEl).setName("\u786E\u8BA4\u5220\u9664").setHeading();
+    contentEl.createEl("p", { text: this.message });
+    const buttonContainer = contentEl.createDiv("obshare-modal-button-container");
+    const confirmButton = buttonContainer.createEl("button", { text: "\u786E\u8BA4\u5220\u9664", cls: "mod-warning" });
+    const cancelButton = buttonContainer.createEl("button", { text: "\u53D6\u6D88" });
+    cancelButton.onclick = () => {
+      this.close();
+    };
+    confirmButton.onclick = () => {
+      void Promise.resolve(this.onConfirm()).finally(() => {
+        this.close();
+      });
+    };
+  }
+  onClose() {
+    const { contentEl } = this;
+    contentEl.empty();
+  }
+};
 var UploadProgressModal = class extends import_obsidian4.Modal {
-  // 是否为智能更新
-  constructor(app, isSmartUpdate = false) {
+  // 伪进度最大值
+  constructor(app) {
     super(app);
     // 添加标题元素引用
     this.currentProgress = 0;
@@ -6646,31 +5223,23 @@ var UploadProgressModal = class extends import_obsidian4.Modal {
     this.fakeProgressTimer = null;
     this.lastRealProgress = 0;
     this.maxFakeProgress = 90;
-    // 伪进度最大值
-    this.isSmartUpdate = false;
-    this.isSmartUpdate = isSmartUpdate;
   }
   onOpen() {
     const { contentEl } = this;
     contentEl.empty();
     contentEl.addClass("obshare-feishu-upload-progress-modal");
-    const titleText = this.isSmartUpdate ? "\u6B63\u5728\u589E\u91CF\u66F4\u65B0\u6587\u6863" : "\u6B63\u5728\u4E0A\u4F20\u6587\u6863";
-    this.titleElement = contentEl.createEl("h2", { text: titleText, cls: "obshare-progress-modal-title" });
+    const titleText = "\u6B63\u5728\u4E0A\u4F20\u6587\u6863";
+    const titleSetting = new import_obsidian4.Setting(contentEl).setName(titleText).setHeading();
+    this.titleElement = titleSetting.nameEl;
+    this.titleElement.addClass("obshare-progress-modal-title");
     this.stepText = contentEl.createEl("div", { text: "\u51C6\u5907\u4E0A\u4F20...", cls: "obshare-progress-modal-step" });
     const progressContainer = contentEl.createDiv("obshare-feishu-upload-progress");
     this.progressText = progressContainer.createEl("div", { text: "0%", cls: "obshare-progress-text" });
     const progressBarBg = progressContainer.createEl("div", { cls: "obshare-progress-bar" });
     this.progressBar = progressBarBg.createEl("div", { cls: "obshare-progress-fill" });
-    this.progressBar.style.width = "0%";
+    this.progressBar.setCssProps({ "--obshare-progress-width": "0%" });
     this.stepText = contentEl.createEl("div", { text: "\u51C6\u5907\u4E0A\u4F20...", cls: "obshare-progress-modal-step" });
-    this.stepText.style.marginTop = "15px";
-    this.stepText.style.textAlign = "center";
-    this.stepText.style.color = "var(--text-muted)";
-    const hintText = contentEl.createEl("div", { text: "\u8BF7\u4FDD\u6301\u7F51\u7EDC\u8FDE\u63A5\uFF0C\u4E0D\u8981\u5173\u95ED\u6B64\u7A97\u53E3", cls: "obshare-progress-hint" });
-    hintText.style.marginTop = "10px";
-    hintText.style.textAlign = "center";
-    hintText.style.fontSize = "12px";
-    hintText.style.color = "var(--text-faint)";
+    contentEl.createEl("div", { text: "\u8BF7\u4FDD\u6301\u7F51\u7EDC\u8FDE\u63A5\uFF0C\u4E0D\u8981\u5173\u95ED\u6B64\u7A97\u53E3", cls: "obshare-progress-hint" });
     this.startFakeProgress();
   }
   /**
@@ -6694,24 +5263,13 @@ var UploadProgressModal = class extends import_obsidian4.Modal {
     }
   }
   /**
-   * 更新弹窗标题
-   * @param isSmartUpdate 是否为智能更新模式
-   */
-  updateTitle(isSmartUpdate) {
-    this.isSmartUpdate = isSmartUpdate;
-    if (this.titleElement) {
-      const titleText = isSmartUpdate ? "\u6B63\u5728\u589E\u91CF\u66F4\u65B0\u6587\u6863" : "\u6B63\u5728\u4E0A\u4F20\u6587\u6863";
-      this.titleElement.textContent = titleText;
-    }
-  }
-  /**
    * 设置进度条显示
    * @param progress 进度百分比
    */
   setProgress(progress) {
     this.currentProgress = progress;
     if (this.progressBar) {
-      this.progressBar.style.width = `${this.currentProgress}%`;
+      this.progressBar.setCssProps({ "--obshare-progress-width": `${this.currentProgress}%` });
     }
     if (this.progressText) {
       this.progressText.textContent = `${Math.round(this.currentProgress)}%`;
@@ -6792,7 +5350,7 @@ var UserAgreementModal = class extends import_obsidian4.Modal {
     const { contentEl } = this;
     contentEl.empty();
     contentEl.addClass("obshare-user-agreement-modal");
-    contentEl.createEl("h2", { text: "ObShare \u7528\u6237\u534F\u8BAE" });
+    new import_obsidian4.Setting(contentEl).setName("ObShare \u7528\u6237\u534F\u8BAE").setHeading();
     const agreementContainer = contentEl.createDiv({ cls: "obshare-agreement-content" });
     const agreementText = `\u6B22\u8FCE\u4F7F\u7528ObShare\uFF08\u4EE5\u4E0B\u7B80\u79F0"\u672C\u63D2\u4EF6"\uFF09\u3002\u5728\u4F7F\u7528\u672C\u63D2\u4EF6\u4E4B\u524D\uFF0C\u8BF7\u60A8\u4ED4\u7EC6\u9605\u8BFB\u5E76\u7406\u89E3\u4EE5\u4E0B\u6761\u6B3E\u3002\u4F7F\u7528\u672C\u63D2\u4EF6\u5373\u89C6\u4E3A\u60A8\u5DF2\u540C\u610F\u5E76\u9075\u5B88\u672C\u534F\u8BAE\u3002
 
@@ -6843,7 +5401,7 @@ var UserAgreementModal = class extends import_obsidian4.Modal {
 2. **\u7528\u6237\u81EA\u4E3B\u9000\u51FA\u673A\u5236**\u3002\u60A8\u53EF\u968F\u65F6\u5378\u8F7D\u672C\u63D2\u4EF6\u6216\u5220\u9664\u672C\u5730\u914D\u7F6E\u6587\u4EF6\uFF08\u5982 \`data.json\`\uFF09\u4EE5\u7EC8\u6B62\u4F7F\u7528\u3002\u4E00\u65E6\u5378\u8F7D\uFF0C\u6240\u6709\u672C\u5730\u7F13\u5B58\u6570\u636E\u5C06\u88AB\u6E05\u9664\uFF0C\u4F46\u60A8\u5728\u98DE\u4E66\u7B49\u5916\u90E8\u5E73\u53F0\u5DF2\u7ECF\u4E0A\u4F20\u7684\u5185\u5BB9\u4E0D\u4F1A\u56E0\u6B64\u5220\u9664\uFF0C\u4ECD\u9700\u60A8\u81EA\u884C\u5904\u7406\uFF0C\u60A8\u4ECD\u9700\u5BF9\u4E0A\u4F20\u81F3\u98DE\u4E66\u7B49\u5916\u90E8\u5E73\u53F0\u7684\u5185\u5BB9\u8D1F\u8D23\u3002
 
 3. **\u63D2\u4EF6\u7EC8\u6B62\u4F7F\u7528**\u3002\u82E5\u53D1\u73B0\u672C\u63D2\u4EF6\u5B58\u5728\u4E25\u91CD\u5B89\u5168\u6F0F\u6D1E\u3001\u6076\u610F\u884C\u4E3A\u6216\u8FDD\u53CD\u5F00\u6E90\u539F\u5219\u7684\u60C5\u51B5\uFF0C\u4F5C\u8005\u6709\u6743\u7ACB\u5373\u505C\u6B62\u7EF4\u62A4\u6216\u53D1\u5E03\u7EC8\u6B62\u7248\u672C\u3002\u5C4A\u65F6\u5EFA\u8BAE\u7528\u6237\u5C3D\u5FEB\u8FC1\u79FB\u6570\u636E\u5E76\u505C\u6B62\u4F7F\u7528\u3002`;
-    import_obsidian4.MarkdownRenderer.renderMarkdown(agreementText, agreementContainer, "", this.component);
+    void import_obsidian4.MarkdownRenderer.render(this.app, agreementText, agreementContainer, "", this.component);
     const buttonContainer = contentEl.createDiv({ cls: "obshare-agreement-buttons" });
     const rejectButton = buttonContainer.createEl("button", {
       text: "\u62D2\u7EDD"

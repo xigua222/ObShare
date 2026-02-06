@@ -1,8 +1,8 @@
-import { requestUrl, RequestUrlParam } from 'obsidian';
+import { App, TFile, requestUrl, RequestUrlParam } from 'obsidian';
 import { SvgConverter } from './svg-converter';
 
 // 飞书API响应接口
-export interface FeishuApiResponse<T = any> {
+export interface FeishuApiResponse<T = unknown> {
     code: number;
     msg: string;
     data: T;
@@ -48,7 +48,7 @@ export interface DocumentBlock {
     children?: string[];
     text?: {
         elements: TextElement[];
-        style: any;
+        style: TextStyle;
     }
     image?: {
         token?: string;
@@ -61,7 +61,7 @@ export interface DocumentBlock {
 export interface TextElement {
     text_run?: {
         content: string;
-        text_element_style?: any;
+        text_element_style?: TextStyle;
     };
 }
 
@@ -78,13 +78,108 @@ export interface ImageInfo {
     };
 }
 
+type TextStyle = Record<string, unknown>;
+
+type TenantAccessTokenResponse = {
+    tenant_access_token?: string;
+    expire?: number;
+    code?: number;
+    msg?: string;
+};
+
+type ImportTaskRequestBody = {
+    file_extension: string;
+    file_name: string;
+    type: 'docx';
+    file_token: string;
+    point?: {
+        mount_type: number;
+        mount_key: string;
+    };
+};
+
+type PermissionRequestBody = {
+    external_access_entity: string;
+    link_share_entity?: string;
+    copy_entity?: string;
+    security_entity?: string;
+};
+
+type ImportTaskQueryResult = ImportTaskQueryResponse | { result?: ImportTaskQueryResponse };
+
+type MarkdownConvertResponse = {
+    blocks?: unknown[];
+};
+
+type BlockUpdateRequest = {
+    block_id?: string;
+    parent_id?: string;
+    index?: number;
+    insert_block?: Record<string, unknown>;
+    update_text_elements?: {
+        elements: Array<{
+            text_run?: {
+                content: string;
+                text_element_style?: TextStyle;
+            };
+            mention_doc?: Record<string, unknown>;
+            equation?: Record<string, unknown>;
+        }>;
+    };
+    merge_table_cells?: Record<string, unknown>;
+    unmerge_table_cells?: Record<string, unknown>;
+    replace_image?: Record<string, unknown>;
+};
+
+type DocumentBlockPayload = Record<string, unknown>;
+
+type AdapterWithBasePath = {
+    basePath?: string;
+};
+
+type ErrorMeta = {
+    status?: number;
+    statusText?: string;
+    response?: unknown;
+    json?: unknown;
+    headers?: unknown;
+};
+
+const getErrorMeta = (error: unknown): ErrorMeta => {
+    if (typeof error !== 'object' || error === null) {
+        return {};
+    }
+    const meta = error as ErrorMeta;
+    const result: ErrorMeta = {};
+    if (meta.status !== undefined) {
+        result.status = meta.status;
+    }
+    if (meta.statusText !== undefined) {
+        result.statusText = meta.statusText;
+    }
+    if (meta.response !== undefined) {
+        result.response = meta.response;
+    }
+    if (meta.json !== undefined) {
+        result.json = meta.json;
+    }
+    if (meta.headers !== undefined) {
+        result.headers = meta.headers;
+    }
+    return result;
+};
+
+const isImportTaskQueryResponse = (value: unknown): value is ImportTaskQueryResponse => {
+    return typeof value === 'object' && value !== null && 'job_status' in value;
+};
+
 // 飞书API客户端类
 export class FeishuApiClient {
     private appId: string;
     private appSecret: string;
     private accessToken: string | null = null;
     private tokenExpireTime: number = 0;
-    private app?: any;
+    private app: App | undefined;
     private apiCallCountCallback: (() => void) | undefined;
     private tokenRefreshPromise: Promise<string> | null = null; // 防止并发token获取
     private static debugEnabled = false;
@@ -96,12 +191,12 @@ export class FeishuApiClient {
     private readonly baseUrl = 'https://open.feishu.cn/open-apis';
     
     // 限速相关属性
-    private deleteRequestQueue: Array<() => Promise<any>> = [];
+    private deleteRequestQueue: Array<() => Promise<unknown>> = [];
     private isProcessingDeleteQueue = false;
     private lastDeleteRequestTime = 0;
     private readonly DELETE_REQUEST_INTERVAL = 350; // 每次删除请求间隔350ms，确保不超过每秒3次
     
-    constructor(appId: string, appSecret: string, app?: any, apiCallCountCallback?: () => void) {
+    constructor(appId: string, appSecret: string, app: App | undefined, apiCallCountCallback?: () => void) {
         this.appId = appId;
         this.appSecret = appSecret;
         this.app = app;
@@ -112,19 +207,19 @@ export class FeishuApiClient {
         this.debugEnabled = enabled;
     }
 
-    private debug(...args: any[]): void {
+    private debug(...args: unknown[]): void {
         if (FeishuApiClient.debugEnabled) {
             console.debug(...args);
         }
     }
 
-    private static debug(...args: any[]): void {
+    private static debug(...args: unknown[]): void {
         if (FeishuApiClient.debugEnabled) {
             console.debug(...args);
         }
     }
 
-    private static logError(summary: string, error: unknown, details?: any): void {
+    private static logError(summary: string, error: unknown, details?: Record<string, unknown>): void {
         const errorMessage = error instanceof Error ? error.message : String(error);
         console.error(summary, errorMessage);
         FeishuApiClient.debug(`${summary} 详情:`, {
@@ -135,7 +230,7 @@ export class FeishuApiClient {
         });
     }
 
-    private logError(summary: string, error: unknown, details?: any): void {
+    private logError(summary: string, error: unknown, details?: Record<string, unknown>): void {
         FeishuApiClient.logError(summary, error, details);
     }
     
@@ -184,12 +279,14 @@ export class FeishuApiClient {
                     const result = await request();
                     resolve(result);
                 } catch (error) {
-                    reject(error);
+                    reject(error instanceof Error ? error : new Error(String(error)));
                 }
             };
             
             this.deleteRequestQueue.push(wrappedRequest);
-            this.processDeleteQueue().catch(reject);
+            this.processDeleteQueue().catch(error => {
+                reject(error instanceof Error ? error : new Error(String(error)));
+            });
         });
     }
     
@@ -243,7 +340,7 @@ export class FeishuApiClient {
             // 增加API调用计数
             this.apiCallCountCallback?.();
             
-            const result: any = response.json;
+            const result = response.json as TenantAccessTokenResponse;
             
             // 详细检查响应结构 - 飞书API直接返回tenant_access_token字段
             if (!result.tenant_access_token) {
@@ -258,7 +355,7 @@ export class FeishuApiClient {
             
             this.accessToken = result.tenant_access_token;
             // 设置过期时间（使用完整的有效期，通过30分钟提前刷新策略管理）
-            this.tokenExpireTime = now + result.expire * 1000;
+            this.tokenExpireTime = now + (result.expire || 0) * 1000;
             
             return this.accessToken!; // 使用非空断言，因为我们已经验证了token存在
         } catch (error) {
@@ -528,7 +625,7 @@ export class FeishuApiClient {
             fileExtension = 'md';
         }
         
-        const requestBody: any = {
+        const requestBody: ImportTaskRequestBody = {
             file_extension: fileExtension, // Markdown文件扩展名
             file_name: pureFileName, // 纯文件名（不含扩展名）
             type: 'docx', // 导入为飞书文档
@@ -577,17 +674,18 @@ export class FeishuApiClient {
                 });
                 throw new Error(`创建导入任务失败 (错误码: ${result.code}): ${result.msg}`);
             }
-        } catch (error: any) {
+        } catch (error: unknown) {
             // 如果是HTTP错误，尝试获取响应体中的详细错误信息
-            if (error.status === 400 && error.json) {
+            const errorMeta = getErrorMeta(error);
+            if (errorMeta.status === 400 && errorMeta.json) {
                 console.error('[飞书API] 创建导入任务失败 (HTTP 400)');
                 this.debug('[飞书API] HTTP 400错误，详细响应:', {
-                    status: error.status,
-                    responseBody: error.json,
-                    headers: error.headers
+                    status: errorMeta.status,
+                    responseBody: errorMeta.json,
+                    headers: errorMeta.headers
                 });
-                const errorResult = error.json;
-                if (errorResult.code && errorResult.msg) {
+                if (typeof errorMeta.json === 'object' && errorMeta.json !== null && 'code' in errorMeta.json && 'msg' in errorMeta.json) {
+                    const errorResult = errorMeta.json as { code: number; msg: string };
                     throw new Error(`创建导入任务失败 (错误码: ${errorResult.code}): ${errorResult.msg}`);
                 }
             }
@@ -595,8 +693,8 @@ export class FeishuApiClient {
             this.logError('[飞书API] 创建飞书导入任务失败:', error, {
                 requestUrl: url,
                 hasToken: !!token,
-                status: error.status || 'unknown',
-                responseBody: error.json || 'no response body'
+                status: errorMeta.status || 'unknown',
+                responseBody: errorMeta.json || 'no response body'
             });
             const errorMessage = error instanceof Error ? error.message : String(error);
             throw new Error(`创建导入任务失败: ${errorMessage}`);
@@ -624,7 +722,7 @@ export class FeishuApiClient {
             const response = await requestUrl(requestParam);
             // 增加API调用计数
             this.apiCallCountCallback?.();
-            const result: FeishuApiResponse<any> = response.json;
+            const result: FeishuApiResponse<ImportTaskQueryResult> = response.json;
             
             if (result.code !== 0) {
                 console.error('[飞书API] 查询导入任务失败:', result.msg);
@@ -638,7 +736,16 @@ export class FeishuApiClient {
             
             // 根据实际返回的数据结构解析结果
             // 飞书API返回的数据结构是 data.result，而不是直接的 data
-            const taskResult = result.data?.result || result.data;
+            let taskResult: ImportTaskQueryResponse | undefined;
+            if (typeof result.data === 'object' && result.data !== null && 'result' in result.data) {
+                taskResult = (result.data as { result?: ImportTaskQueryResponse }).result;
+            } else if (isImportTaskQueryResponse(result.data)) {
+                taskResult = result.data;
+            }
+            
+            if (!taskResult) {
+                throw new Error('导入任务结果为空');
+            }
             
             return taskResult;
         } catch (error) {
@@ -897,7 +1004,7 @@ export class FeishuApiClient {
             // 增加API调用计数
             this.apiCallCountCallback?.();
             
-            const result: FeishuApiResponse<any> = response.json;
+            const result: FeishuApiResponse<unknown> = response.json;
             
             if (result.code !== 0) {
                 console.error('[飞书API] 更新文档块失败:', result.msg);
@@ -1031,7 +1138,7 @@ export class FeishuApiClient {
             
             // 如果是绝对路径，提取文件名进行搜索
             if (imagePath.match(/^[A-Za-z]:/) || imagePath.startsWith('/')) {
-                const fileName = imagePath.split(/[\/\\]/).pop();
+                const fileName = imagePath.split(/[/\\]/).pop();
                 if (fileName) {
                     fullPath = fileName;
                 }
@@ -1041,7 +1148,7 @@ export class FeishuApiClient {
             }
             
             // 在Obsidian中查找图片文件
-            const file = await this.searchImageInVault(fullPath);
+            const file = this.searchImageInVault(fullPath);
             if (!file) {
                 console.warn('[飞书API] 无法找到图片文件:', fullPath);
                 return null;
@@ -1104,7 +1211,7 @@ export class FeishuApiClient {
             }
 
             // 检查是否为Mermaid临时图片
-            const fileName = imagePath.split(/[\\/]/).pop() || imagePath;
+            const fileName = imagePath.split(/[/\\]/).pop() || imagePath;
             if (FeishuApiClient.isMermaidTempImage(fileName)) {
                 const cachedData = FeishuApiClient.getMermaidImageFromCache(fileName);
                 if (cachedData) {
@@ -1127,7 +1234,7 @@ export class FeishuApiClient {
             
             // 如果是绝对路径，提取文件名进行搜索
             if (imagePath.match(/^[A-Za-z]:/) || imagePath.startsWith('/')) {
-                const fileName = imagePath.split(/[\\/]/).pop();
+                const fileName = imagePath.split(/[/\\]/).pop();
                 if (fileName) {
                     fullPath = fileName;
                 }
@@ -1138,13 +1245,21 @@ export class FeishuApiClient {
             
 
             
-            // 首先尝试直接路径查找
-            let file = this.app?.vault?.getAbstractFileByPath(fullPath);
+            const app = this.app;
+            if (!app) {
+                throw new Error('App 未初始化');
+            }
+            
+            let file: TFile | null = null;
+            const abstractFile = app.vault.getAbstractFileByPath(fullPath);
+            if (abstractFile instanceof TFile) {
+                file = abstractFile;
+            }
             
             // 如果直接路径找不到，在整个vault中搜索同名文件
             if (!file) {
                 this.debug('[飞书API] 直接路径未找到，开始在vault中搜索文件:', fullPath);
-                file = await this.searchImageInVault(fullPath);
+                file = this.searchImageInVault(fullPath);
             }
             
             if (!file) {
@@ -1152,21 +1267,15 @@ export class FeishuApiClient {
                 return null;
             }
             
-            // 检查是否为文件（而非文件夹）
-            if (!('extension' in file)) {
-                console.error('[飞书API] 路径不是有效的文件:', file.path);
-                return null;
-            }
-            
             // 检查是否为SVG文件
-            const fileExtension = (file as any).extension?.toLowerCase();
+            const fileExtension = file.extension?.toLowerCase();
             if (fileExtension === 'svg') {
                 // 处理SVG文件：读取为文本，转换为PNG
-                const svgContent = await this.app.vault.read(file as any);
+                const svgContent = await app.vault.read(file);
                 
                 // 检查SVG内容有效性
-                if (!SvgConverter.isSvgFile((file as any).name, svgContent)) {
-                    console.error('[飞书API] 无效的SVG文件:', (file as any).path);
+                if (!SvgConverter.isSvgFile(file.name, svgContent)) {
+                    console.error('[飞书API] 无效的SVG文件:', file.path);
                     return null;
                 }
                 
@@ -1187,14 +1296,14 @@ export class FeishuApiClient {
                     };
                 } catch (error) {
                     this.logError('[飞书API] SVG转PNG失败:', error, {
-                        path: (file as any).path
+                        path: file.path
                     });
                     return null;
                 }
             } else {
                 // 处理其他格式的图片文件
                 // 读取文件内容为ArrayBuffer
-                const arrayBuffer = await this.app.vault.readBinary(file as any);
+                const arrayBuffer = await app.vault.readBinary(file);
                 
                 // 转换为base64
                 const uint8Array = new Uint8Array(arrayBuffer);
@@ -1217,13 +1326,13 @@ export class FeishuApiClient {
      * @param fileName 文件名或路径
      * @returns 找到的文件对象
      */
-    private async searchImageInVault(fileName: string): Promise<any> {
+    private searchImageInVault(fileName: string): TFile | null {
         if (!this.app?.vault) {
             return null;
         }
         
         // 提取纯文件名（去除路径）
-        const targetFileName = fileName.split(/[\\/]/).pop();
+        const targetFileName = fileName.split(/[/\\]/).pop();
         if (!targetFileName) {
             return null;
         }
@@ -1312,7 +1421,7 @@ export class FeishuApiClient {
         const convertedContent = FeishuApiClient.convertObsidianImageSyntax(markdownContent);
         
         // 匹配标准Markdown格式的图片: ![alt](path) 或 ![alt](path "title")
-        const markdownImageRegex = /!\[([^\]]*)\]\(([^\)\s]+)(?:\s+"([^"]*)")?\)/g;
+        const markdownImageRegex = /!\[([^\]]*)\]\(([^)\s]+)(?:\s+"([^"]*)")?\)/g;
         
         let match;
         let position = 0;
@@ -1340,6 +1449,16 @@ export class FeishuApiClient {
         
         return imageInfos;
     }
+
+    private static encodeBase64Utf8(content: string): string {
+        const encoder = new TextEncoder();
+        const bytes = encoder.encode(content);
+        let binary = '';
+        for (const byte of bytes) {
+            binary += String.fromCharCode(byte);
+        }
+        return btoa(binary);
+    }
     
     /**
      * 直接上传文件到飞书云盘
@@ -1363,7 +1482,7 @@ export class FeishuApiClient {
             onProgress?.('正在上传文件...');
             
             // 将Markdown内容转换为base64
-            const fileContent = btoa(unescape(encodeURIComponent(convertedContent)));
+            const fileContent = FeishuApiClient.encodeBase64Utf8(convertedContent);
             
             // 直接上传文件
             const fileToken = await this.uploadFile(fileName, fileContent, documentId || '');
@@ -1409,7 +1528,7 @@ export class FeishuApiClient {
             onProgress?.('正在上传文件到云空间...');
             
             // 将Markdown内容转换为base64
-            const fileContent = btoa(unescape(encodeURIComponent(convertedContent)));
+            const fileContent = FeishuApiClient.encodeBase64Utf8(convertedContent);
             
             // 先上传文件到云空间获取file_token（使用完整文件名包含扩展名）
             mdFileToken = await this.uploadFile(fileName, fileContent, documentId || '');
@@ -1433,7 +1552,9 @@ export class FeishuApiClient {
             if (preProcessedImageInfos && preProcessedImageInfos.length > 0) {
                 imageInfos = preProcessedImageInfos;
             } else {
-                imageInfos = FeishuApiClient.extractImageInfoFromMarkdown(markdownContent, this.app?.vault?.adapter?.basePath);
+                const adapter = this.app?.vault?.adapter as AdapterWithBasePath | undefined;
+                const basePath = adapter?.basePath;
+                imageInfos = FeishuApiClient.extractImageInfoFromMarkdown(markdownContent, basePath);
             }
             
             if (imageInfos.length > 0) {
@@ -1505,7 +1626,7 @@ export class FeishuApiClient {
             onProgress?.('正在上传文件到云空间...');
             
             // 将Markdown内容转换为base64
-            const fileContent = btoa(unescape(encodeURIComponent(convertedContent)));
+            const fileContent = FeishuApiClient.encodeBase64Utf8(convertedContent);
             
             // 先上传文件到云空间获取file_token（使用完整文件名包含扩展名）
             mdFileToken = await this.uploadFile(fileName, fileContent, documentId || '');
@@ -1525,7 +1646,9 @@ export class FeishuApiClient {
             const result = await this.waitForImportTask(ticket, onProgress);
             
             // 检查是否有图片需要处理
-            const imageInfos = FeishuApiClient.extractImageInfoFromMarkdown(markdownContent, this.app?.vault?.adapter?.basePath);
+            const adapter = this.app?.vault?.adapter as AdapterWithBasePath | undefined;
+            const basePath = adapter?.basePath;
+            const imageInfos = FeishuApiClient.extractImageInfoFromMarkdown(markdownContent, basePath);
             if (imageInfos.length > 0) {
                 onProgress?.('正在处理文档中的图片...');
                 await this.processImagesInDocument(result.token, imageInfos, onProgress);
@@ -1640,7 +1763,7 @@ export class FeishuApiClient {
             const response = await requestUrl(requestParam);
             // 增加API调用计数
             this.apiCallCountCallback?.();
-            const result: FeishuApiResponse<any> = response.json;
+            const result: FeishuApiResponse<unknown> = response.json;
             
             if (result.code === 0) {
                 return true;
@@ -1654,12 +1777,13 @@ export class FeishuApiClient {
                 throw new Error(`转移文档所有权失败: [${result.code}] ${result.msg}`);
             }
             
-        } catch (error: any) {
+        } catch (error: unknown) {
+            const errorMeta = getErrorMeta(error);
             this.logError('[飞书API] ❌ 所有权转移异常:', error, {
-                status: error.status,
-                statusText: error.statusText,
-                response: error.response,
-                json: error.json
+                status: errorMeta.status,
+                statusText: errorMeta.statusText,
+                response: errorMeta.response,
+                json: errorMeta.json
             });
             throw error;
         }
@@ -1697,7 +1821,7 @@ export class FeishuApiClient {
             }
             
             // 一次性设置所有权限
-            const requestBody: any = {
+            const requestBody: PermissionRequestBody = {
                 external_access_entity: 'open'
             };
             
@@ -1727,12 +1851,13 @@ export class FeishuApiClient {
             
             return true;
             
-        } catch (error: any) {
+        } catch (error: unknown) {
+            const errorMeta = getErrorMeta(error);
             this.logError('[飞书API] ❌ 权限设置失败:', error, {
-                status: error.status,
-                statusText: error.statusText,
-                response: error.response,
-                json: error.json
+                status: errorMeta.status,
+                statusText: errorMeta.statusText,
+                response: errorMeta.response,
+                json: errorMeta.json
             });
             throw error;
         }
@@ -1758,7 +1883,7 @@ export class FeishuApiClient {
         
         try {
             // 一次性设置所有权限
-            const requestBody: any = {
+            const requestBody: PermissionRequestBody = {
                 external_access_entity: 'open'
             };
             
@@ -1788,12 +1913,13 @@ export class FeishuApiClient {
             
             return true;
             
-        } catch (error: any) {
+        } catch (error: unknown) {
+            const errorMeta = getErrorMeta(error);
             this.logError('[飞书API] ❌ 权限设置失败（无所有权转移）:', error, {
-                status: error.status,
-                statusText: error.statusText,
-                response: error.response,
-                json: error.json
+                status: errorMeta.status,
+                statusText: errorMeta.statusText,
+                response: errorMeta.response,
+                json: errorMeta.json
             });
             throw error;
         }
@@ -1805,7 +1931,7 @@ export class FeishuApiClient {
     private async executePermissionRequest(
         url: string, 
         token: string, 
-        requestBody: any, 
+        requestBody: PermissionRequestBody, 
         stepName: string
     ): Promise<void> {
         let retryCount = 0;
@@ -1827,7 +1953,7 @@ export class FeishuApiClient {
                 const response = await requestUrl(requestParam);
                 // 增加API调用计数
                 this.apiCallCountCallback?.();
-                const result: FeishuApiResponse<any> = response.json;
+                const result: FeishuApiResponse<unknown> = response.json;
                 
                 if (result.code === 0) {
                     return;
@@ -1842,18 +1968,19 @@ export class FeishuApiClient {
                     throw new Error(`${stepName}失败: [${result.code}] ${result.msg}`);
                 }
                 
-            } catch (error: any) {
+            } catch (error: unknown) {
+                const errorMeta = getErrorMeta(error);
                 this.logError(`[飞书API] ❌ ${stepName}第${retryCount + 1}次请求异常:`, error, {
-                    status: error.status,
-                    statusText: error.statusText,
-                    response: error.response,
-                    json: error.json,
+                    status: errorMeta.status,
+                    statusText: errorMeta.statusText,
+                    response: errorMeta.response,
+                    json: errorMeta.json,
                     retryCount,
                     maxRetries
                 });
 
                 // 检查是否是500错误
-                if (error.status === 500 && retryCount < maxRetries) {
+                if (errorMeta.status === 500 && retryCount < maxRetries) {
                     retryCount++;
                     console.warn(`[飞书API] ⚠️ ${stepName}遇到500错误，${retryDelay/1000}秒后进行第${retryCount + 1}次重试...`);
                     await new Promise(resolve => setTimeout(resolve, retryDelay));
@@ -1861,10 +1988,10 @@ export class FeishuApiClient {
                 } else {
                     // 非500错误或已达到最大重试次数
                     this.logError(`[飞书API] ❌ ${stepName}最终失败:`, error, {
-                        status: error.status,
-                        statusText: error.statusText,
-                        response: error.response,
-                        json: error.json,
+                        status: errorMeta.status,
+                        statusText: errorMeta.statusText,
+                        response: errorMeta.response,
+                        json: errorMeta.json,
                         retryCount,
                         maxRetries
                     });
@@ -1904,7 +2031,7 @@ export class FeishuApiClient {
             const response = await requestUrl(requestParam);
             // 增加API调用计数
             this.apiCallCountCallback?.();
-            const result: FeishuApiResponse<any> = response.json;
+            const result: FeishuApiResponse<unknown> = response.json;
             
             if (result.code === 0) {
                 return true;
@@ -1918,12 +2045,13 @@ export class FeishuApiClient {
                 throw new Error(`删除文件失败: [${result.code}] ${result.msg}`);
             }
             
-        } catch (error: any) {
+        } catch (error: unknown) {
+            const errorMeta = getErrorMeta(error);
             this.logError('[飞书API] ❌ 删除文件异常:', error, {
-                status: error.status,
-                statusText: error.statusText,
-                response: error.response,
-                json: error.json
+                status: errorMeta.status,
+                statusText: errorMeta.statusText,
+                response: errorMeta.response,
+                json: errorMeta.json
             });
             throw error;
         }
@@ -1980,22 +2108,22 @@ export class FeishuApiClient {
      * @param documentId 文档ID
      * @returns 文档块数组（包含完整的块信息）
      */
-    async getDocumentBlocksDetailed(documentId: string): Promise<any[]> {
+    async getDocumentBlocksDetailed(documentId: string): Promise<DocumentBlock[]> {
         try {
             const token = await this.getAccessToken();
-            const allBlocks: any[] = [];
+            const allBlocks: DocumentBlock[] = [];
             let pageToken: string | undefined;
             let hasMore = true;
 
             while (hasMore) {
                 const url = `${this.baseUrl}/docx/v1/documents/${documentId}/blocks`;
-                const params: any = {
-                    page_size: 500,
+                const params: Record<string, string> = {
+                    page_size: '500',
                     user_id_type: 'user_id'
                 };
                 
                 if (pageToken) {
-                    params.page_token = pageToken;
+                    params['page_token'] = pageToken;
                 }
 
                 const requestParam: RequestUrlParam = {
@@ -2038,26 +2166,8 @@ export class FeishuApiClient {
      */
     async batchUpdateDocumentBlocks(
         documentId: string, 
-        requests: Array<{
-            block_id?: string;
-            parent_id?: string;
-            index?: number;
-            insert_block?: any;
-            update_text_elements?: {
-                elements: Array<{
-                    text_run?: {
-                        content: string;
-                        text_element_style?: any;
-                    };
-                    mention_doc?: any;
-                    equation?: any;
-                }>;
-            };
-            merge_table_cells?: any;
-            unmerge_table_cells?: any;
-            replace_image?: any;
-        }>
-    ): Promise<any> {
+        requests: BlockUpdateRequest[]
+    ): Promise<unknown> {
         try {
             const token = await this.getAccessToken();
             const url = `${this.baseUrl}/docx/v1/documents/${documentId}/blocks/batch_update?document_revision_id=-1`;
@@ -2095,7 +2205,7 @@ export class FeishuApiClient {
             }
 
             const response = await requestUrl(requestParam);
-            const result: FeishuApiResponse<any> = response.json;
+            const result: FeishuApiResponse<unknown> = response.json;
 
             if (result.code !== 0) {
                 throw new Error(`批量更新文档块失败: ${result.msg}`);
@@ -2129,8 +2239,8 @@ export class FeishuApiClient {
         documentId: string, 
         parentId: string, 
         index: number, 
-        children: any[]
-    ): Promise<any> {
+        children: DocumentBlockPayload[]
+    ): Promise<unknown> {
         try {
             const token = await this.getAccessToken();
             const url = `${this.baseUrl}/docx/v1/documents/${documentId}/blocks/${parentId}/children?document_revision_id=-1`;
@@ -2163,7 +2273,7 @@ export class FeishuApiClient {
             }
 
             const response = await requestUrl(requestParam);
-            const result: FeishuApiResponse<any> = response.json;
+            const result: FeishuApiResponse<unknown> = response.json;
 
             this.debug('[飞书API] 创建文档块原始响应:', {
                 status: response.status,
@@ -2223,8 +2333,8 @@ export class FeishuApiClient {
         parentId: string,
         index: number,
         childrenIds: string[],
-        descendants: any[]
-    ): Promise<any> {
+        descendants: DocumentBlockPayload[]
+    ): Promise<unknown> {
         try {
             const token = await this.getAccessToken();
             const url = `${this.baseUrl}/docx/v1/documents/${documentId}/blocks/${parentId}/descendant?document_revision_id=-1`;
@@ -2259,7 +2369,7 @@ export class FeishuApiClient {
             }
 
             const response = await requestUrl(requestParam);
-            const result: FeishuApiResponse<any> = response.json;
+            const result: FeishuApiResponse<unknown> = response.json;
 
             this.debug('[飞书API] 创建嵌套文档块原始响应:', {
                 status: response.status,
@@ -2314,7 +2424,7 @@ export class FeishuApiClient {
      * @param blockIds 要删除的块ID数组
      * @returns 删除结果
      */
-    async batchDeleteDocumentBlocks(documentId: string, parentId: string, startIndex: number, endIndex: number): Promise<any> {
+    async batchDeleteDocumentBlocks(documentId: string, parentId: string, startIndex: number, endIndex: number): Promise<unknown> {
         return this.queueDeleteRequest(async () => {
             try {
                 const token = await this.getAccessToken();
@@ -2349,7 +2459,7 @@ export class FeishuApiClient {
                 }
 
                 const response = await requestUrl(requestParam);
-                const result: FeishuApiResponse<any> = response.json;
+                const result: FeishuApiResponse<unknown> = response.json;
 
                 if (result.code !== 0) {
                     throw new Error(`批量删除文档块失败: ${result.msg}`);
@@ -2383,7 +2493,7 @@ export class FeishuApiClient {
      * @param blockId 块ID
      * @returns 删除结果
      */
-    async deleteDocumentBlock(documentId: string, blockId: string, parentId?: string, index?: number): Promise<any> {
+    async deleteDocumentBlock(documentId: string, blockId: string, parentId?: string, index?: number): Promise<unknown> {
         return this.queueDeleteRequest(async () => {
             try {
                 const token = await this.getAccessToken();
@@ -2421,7 +2531,7 @@ export class FeishuApiClient {
                 }
 
                 const response = await requestUrl(requestParam);
-                const result: FeishuApiResponse<any> = response.json;
+                const result: FeishuApiResponse<unknown> = response.json;
 
                 if (result.code !== 0) {
                     throw new Error(`删除文档块失败: ${result.msg}`);
@@ -2446,7 +2556,7 @@ export class FeishuApiClient {
      * @param content Markdown 内容
      * @returns 转换结果
      */
-    async convertMarkdownToBlocks(content: string): Promise<any> {
+    async convertMarkdownToBlocks(content: string): Promise<MarkdownConvertResponse> {
         try {
             const token = await this.getAccessToken();
             const url = `${this.baseUrl}/docx/v1/documents/blocks/convert`;
@@ -2476,7 +2586,7 @@ export class FeishuApiClient {
             }
 
             const response = await requestUrl(requestParam);
-            const result: FeishuApiResponse<any> = response.json;
+            const result: FeishuApiResponse<MarkdownConvertResponse> = response.json;
 
             if (result.code !== 0) {
                 throw new Error(`转换 Markdown 失败: ${result.msg}`);
@@ -2497,6 +2607,6 @@ export class FeishuApiClient {
 /**
  * 创建飞书API客户端实例
  */
-export function createFeishuClient(appId: string, appSecret: string, app?: any, apiCallCountCallback?: () => void): FeishuApiClient {
+export function createFeishuClient(appId: string, appSecret: string, app?: App, apiCallCountCallback?: () => void): FeishuApiClient {
     return new FeishuApiClient(appId, appSecret, app, apiCallCountCallback);
 }

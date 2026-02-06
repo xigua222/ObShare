@@ -1,9 +1,16 @@
+import { Platform } from 'obsidian';
+
 // 使用Web Crypto API替代Node.js crypto模块
 
 /**
  * 加密工具类 - 提供透明的数据加密/解密功能
  * 基于设备特征生成固定密钥，用户无感知
  */
+type SensitiveFieldName = 'appId' | 'appSecret' | 'folderToken' | 'userId';
+type SensitiveSettings = Partial<Record<SensitiveFieldName, string>> & object;
+type EncryptedFieldMap = Partial<Record<SensitiveFieldName, string>>;
+type DebugDetails = Record<string, unknown>;
+
 export class CryptoUtils {
     // 加密算法配置
     private static readonly ALGORITHM = 'AES-GCM';
@@ -11,25 +18,25 @@ export class CryptoUtils {
     private static readonly IV_LENGTH = 12;   // 96 bits for GCM
 
     // 敏感字段列表
-    private static readonly SENSITIVE_FIELDS = ['appId', 'appSecret', 'folderToken', 'userId'];
+    private static readonly SENSITIVE_FIELDS: SensitiveFieldName[] = ['appId', 'appSecret', 'folderToken', 'userId'];
 
     // 缓存机制
     private static encryptionKey: CryptoKey | null = null;
     private static lastEncryptedData: string | null = null;
-    private static lastEncryptedResult: any = null;
+    private static lastEncryptedResult: string | EncryptedFieldMap | null = null;
     private static debugEnabled = false;
 
     static setDebugEnabled(enabled: boolean): void {
         this.debugEnabled = enabled;
     }
 
-    private static debug(...args: any[]): void {
+    private static debug(...args: unknown[]): void {
         if (this.debugEnabled) {
             console.debug(...args);
         }
     }
 
-    private static logError(summary: string, error: unknown, details?: any): void {
+    private static logError(summary: string, error: unknown, details?: DebugDetails): void {
         const errorMessage = error instanceof Error ? error.message : String(error);
         console.error(summary, errorMessage);
         this.debug(`${summary} 详情:`, {
@@ -57,14 +64,26 @@ export class CryptoUtils {
      */
     private static async generateDeviceKey(): Promise<CryptoKey> {
         // 收集设备特征信息
+        const platformLabel = Platform.isMacOS
+            ? 'macos'
+            : Platform.isWin
+            ? 'windows'
+            : Platform.isLinux
+            ? 'linux'
+            : Platform.isMobile
+            ? 'mobile'
+            : 'unknown';
+
         const deviceInfo = [
-            navigator.userAgent,           // 用户代理
-            navigator.platform,           // 平台信息
-            navigator.language,           // 语言设置
-            screen.width + 'x' + screen.height, // 屏幕分辨率
-            new Date().getTimezoneOffset().toString(), // 时区偏移
-            window.location.hostname || 'obsidian', // 主机名
-            'feishu-plugin-v1'            // 插件标识
+            `platform:${platformLabel}`,
+            `desktop:${Platform.isDesktop}`,
+            `mobile:${Platform.isMobile}`,
+            `app:${Platform.isDesktopApp ? 'desktop' : Platform.isMobileApp ? 'mobile' : 'web'}`,
+            navigator.language,
+            screen.width + 'x' + screen.height,
+            new Date().getTimezoneOffset().toString(),
+            window.location.hostname || 'obsidian',
+            'feishu-plugin-v1'
         ].join('|');
         
         // 使用TextEncoder将字符串转换为Uint8Array
@@ -95,7 +114,7 @@ export class CryptoUtils {
         }
         
         // 检查缓存
-        if (this.lastEncryptedData === plaintext && this.lastEncryptedResult) {
+        if (this.lastEncryptedData === plaintext && typeof this.lastEncryptedResult === 'string') {
             return this.lastEncryptedResult;
         }
         
@@ -228,18 +247,19 @@ export class CryptoUtils {
      * @param settings 设置对象
      * @returns 加密后的设置对象
      */
-    static async encryptSensitiveSettings(settings: any): Promise<any> {
+    static async encryptSensitiveSettings<T extends SensitiveSettings>(settings: T): Promise<T> {
         // 检查敏感字段是否有变化
         const sensitiveData = this.extractSensitiveData(settings);
         const sensitiveDataString = JSON.stringify(sensitiveData);
         
+        const encrypted = { ...settings };
+        const cachedEncryptedFields = this.lastEncryptedResult;
         // 如果敏感数据没有变化，直接返回缓存的结果
-        if (this.lastEncryptedData === sensitiveDataString && this.lastEncryptedResult) {
-            return { ...settings, ...this.lastEncryptedResult };
+        if (this.lastEncryptedData === sensitiveDataString && cachedEncryptedFields && typeof cachedEncryptedFields === 'object' && !Array.isArray(cachedEncryptedFields)) {
+            return Object.assign(encrypted, cachedEncryptedFields);
         }
         
-        const encrypted = { ...settings };
-        const encryptedFields: any = {};
+        const encryptedFields: EncryptedFieldMap = {};
         
         for (const field of this.SENSITIVE_FIELDS) {
             if (encrypted[field] && typeof encrypted[field] === 'string') {
@@ -258,8 +278,8 @@ export class CryptoUtils {
     /**
      * 提取敏感数据用于缓存比较
      */
-    private static extractSensitiveData(settings: any): any {
-        const sensitiveData: any = {};
+    private static extractSensitiveData(settings: SensitiveSettings): EncryptedFieldMap {
+        const sensitiveData: EncryptedFieldMap = {};
         for (const field of this.SENSITIVE_FIELDS) {
             if (settings[field]) {
                 sensitiveData[field] = settings[field];
@@ -273,7 +293,7 @@ export class CryptoUtils {
      * @param settings 加密的设置对象
      * @returns 解密后的设置对象
      */
-    static async decryptSensitiveSettings(settings: any): Promise<any> {
+    static async decryptSensitiveSettings<T extends SensitiveSettings>(settings: T): Promise<T> {
         const result = { ...settings };
         let hasEncryptedData = false;
         

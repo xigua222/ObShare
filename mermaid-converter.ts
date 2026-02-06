@@ -7,6 +7,8 @@ export interface MermaidInfo {
     content: string;
     fileName: string;
     type: string;
+    pngBase64?: string;
+    tempFileName?: string;
 }
 
 /**
@@ -49,13 +51,13 @@ export class MermaidConverter {
         this.debugEnabled = enabled;
     }
 
-    private static debug(...args: any[]): void {
+    private static debug(...args: unknown[]): void {
         if (this.debugEnabled) {
             console.debug(...args);
         }
     }
 
-    private static logError(summary: string, error: unknown, details?: any): void {
+    private static logError(summary: string, error: unknown, details?: Record<string, unknown>): void {
         const errorMessage = error instanceof Error ? error.message : String(error);
         console.error(summary, errorMessage);
         this.debug(`${summary} 详情:`, {
@@ -169,7 +171,8 @@ export class MermaidConverter {
                 const markdownContent = `\`\`\`mermaid\n${mermaidContent}\n\`\`\``;
 
                 // 使用Obsidian的MarkdownRenderer渲染Mermaid
-                await MarkdownRenderer.renderMarkdown(
+                await MarkdownRenderer.render(
+                    app,
                     markdownContent,
                     tempContainer,
                     '',
@@ -234,7 +237,7 @@ export class MermaidConverter {
 
             } catch (error) {
                 this.logError('[Mermaid转换] 转换失败:', error);
-                reject(error);
+                reject(error instanceof Error ? error : new Error(String(error)));
             } finally {
                 // 清理资源
                 if (component) {
@@ -387,7 +390,7 @@ export class MermaidConverter {
                         this.debug(`[SVG转PNG] 转换完成，最终尺寸: ${targetWidth}x${targetHeight}`);
                         resolve(base64Data);
                     } catch (error) {
-                        reject(error);
+                        reject(error instanceof Error ? error : new Error(String(error)));
                     }
                 };
                 
@@ -399,7 +402,7 @@ export class MermaidConverter {
 
             } catch (error) {
                 this.logError('[SVG转PNG] 转换失败:', error);
-                reject(error);
+                reject(error instanceof Error ? error : new Error(String(error)));
             }
         });
     }
