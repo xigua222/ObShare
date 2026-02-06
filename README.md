@@ -91,7 +91,6 @@
 | `open_id` | `ou_xxxxxx` | ❌ 错误 |
 | `union_id` | `on_xxxxxx` | ❌ 错误 |
 
-**获取方式**：在 [飞书开放平台 API 调试台](https://open.feishu.cn/api-explorer/) 中调用通讯录相关接口（如 `获取单个用户信息`）查看返回的 `user_id` 字段。
 
 #### ⚠️ 文件夹权限配置（必须）
 
