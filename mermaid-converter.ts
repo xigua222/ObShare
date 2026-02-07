@@ -152,102 +152,88 @@ export class MermaidConverter {
         mermaidContent: string, 
         options: MermaidConverterOptions = {}
     ): Promise<MermaidConversionResult> {
-        return new Promise(async (resolve, reject) => {
-            let tempContainer: HTMLElement | null = null;
-            let component: Component | null = null;
+        let tempContainer: HTMLElement | null = null;
+        let component: Component | null = null;
 
-            try {
-                this.debug('[Mermaid转换] 开始使用Obsidian内置渲染转换Mermaid');
+        try {
+            this.debug('[Mermaid转换] 开始使用Obsidian内置渲染转换Mermaid');
 
-                // 创建临时容器用于渲染 - 优化样式以确保正确渲染
-                tempContainer = document.createElement('div');
-                tempContainer.classList.add('obshare-mermaid-temp-container');
-                document.body.appendChild(tempContainer);
+            tempContainer = document.createElement('div');
+            tempContainer.classList.add('obshare-mermaid-temp-container');
+            document.body.appendChild(tempContainer);
 
-                // 创建组件用于渲染
-                component = new Component();
+            component = new Component();
 
-                // 构造Markdown内容
-                const markdownContent = `\`\`\`mermaid\n${mermaidContent}\n\`\`\``;
+            const markdownContent = `\`\`\`mermaid\n${mermaidContent}\n\`\`\``;
 
-                // 使用Obsidian的MarkdownRenderer渲染Mermaid
-                await MarkdownRenderer.render(
-                    app,
-                    markdownContent,
-                    tempContainer,
-                    '',
-                    component
-                );
+            await MarkdownRenderer.render(
+                app,
+                markdownContent,
+                tempContainer,
+                '',
+                component
+            );
 
-                // 等待渲染完成
-                await this.waitForMermaidRender(tempContainer);
+            await this.waitForMermaidRender(tempContainer);
 
-                // 查找渲染后的SVG元素
-                const svgElement = tempContainer.querySelector('svg');
-                if (!svgElement) {
-                    throw new Error('未找到渲染后的SVG元素');
-                }
+            const svgElement = tempContainer.querySelector('svg');
+            if (!svgElement) {
+                throw new Error('未找到渲染后的SVG元素');
+            }
 
-                this.debug('[Mermaid转换] 成功获取SVG元素，开始转换为PNG');
+            this.debug('[Mermaid转换] 成功获取SVG元素，开始转换为PNG');
 
-                // 获取SVG的实际尺寸
-                let svgWidth: number, svgHeight: number;
-                
-                // 尝试从SVG属性获取尺寸
-                const widthAttr = svgElement.getAttribute('width');
-                const heightAttr = svgElement.getAttribute('height');
-                
-                if (widthAttr && heightAttr && !widthAttr.includes('%') && !heightAttr.includes('%')) {
-                    svgWidth = parseFloat(widthAttr);
-                    svgHeight = parseFloat(heightAttr);
+            let svgWidth: number;
+            let svgHeight: number;
+            
+            const widthAttr = svgElement.getAttribute('width');
+            const heightAttr = svgElement.getAttribute('height');
+            
+            if (widthAttr && heightAttr && !widthAttr.includes('%') && !heightAttr.includes('%')) {
+                svgWidth = parseFloat(widthAttr);
+                svgHeight = parseFloat(heightAttr);
+            } else {
+                const rect = svgElement.getBoundingClientRect();
+                if (rect.width > 0 && rect.height > 0) {
+                    svgWidth = rect.width;
+                    svgHeight = rect.height;
                 } else {
-                    // 使用getBoundingClientRect获取渲染尺寸
-                    const rect = svgElement.getBoundingClientRect();
-                    if (rect.width > 0 && rect.height > 0) {
-                        svgWidth = rect.width;
-                        svgHeight = rect.height;
-                    } else {
-                        // 回退到getBBox
-                        try {
-                            const bbox = svgElement.getBBox();
-                            svgWidth = bbox.width || svgElement.clientWidth || 800;
-                            svgHeight = bbox.height || svgElement.clientHeight || 600;
-                        } catch (e) {
-                            svgWidth = svgElement.clientWidth || 800;
-                            svgHeight = svgElement.clientHeight || 600;
-                        }
+                    try {
+                        const bbox = svgElement.getBBox();
+                        svgWidth = bbox.width || svgElement.clientWidth || 800;
+                        svgHeight = bbox.height || svgElement.clientHeight || 600;
+                    } catch (e) {
+                        svgWidth = svgElement.clientWidth || 800;
+                        svgHeight = svgElement.clientHeight || 600;
                     }
                 }
-
-                this.debug(`[SVG转PNG] SVG尺寸: ${svgWidth}x${svgHeight}`);
-
-                // 直接从SVG元素转换为PNG
-                const pngBase64 = await this.svgElementToPng(svgElement, options);
-                
-                // 获取缩放比例
-                const scale = options.scale || this.DEFAULT_SCALE;
-
-                this.debug('[Mermaid转换] 转换完成');
-                resolve({
-                    pngBase64,
-                    originalWidth: Math.round(svgWidth),
-                    originalHeight: Math.round(svgHeight),
-                    scale
-                });
-
-            } catch (error) {
-                this.logError('[Mermaid转换] 转换失败:', error);
-                reject(error instanceof Error ? error : new Error(String(error)));
-            } finally {
-                // 清理资源
-                if (component) {
-                    component.unload();
-                }
-                if (tempContainer && tempContainer.parentNode) {
-                    tempContainer.parentNode.removeChild(tempContainer);
-                }
             }
-        });
+
+            this.debug(`[SVG转PNG] SVG尺寸: ${svgWidth}x${svgHeight}`);
+
+            const pngBase64 = await this.svgElementToPng(svgElement, options);
+            
+            const scale = options.scale || this.DEFAULT_SCALE;
+
+            this.debug('[Mermaid转换] 转换完成');
+            return {
+                pngBase64,
+                originalWidth: Math.round(svgWidth),
+                originalHeight: Math.round(svgHeight),
+                scale
+            };
+
+        } catch (error) {
+            this.logError('[Mermaid转换] 转换失败:', error);
+            throw (error instanceof Error ? error : new Error(String(error)));
+        } finally {
+            if (component) {
+                component.unload();
+            }
+            if (tempContainer && tempContainer.parentNode) {
+                tempContainer.parentNode.removeChild(tempContainer);
+            }
+        }
     }
 
     /**
@@ -351,7 +337,12 @@ export class MermaidConverter {
                 ctx.fillRect(0, 0, targetWidth, targetHeight);
 
                 // 克隆SVG元素以避免修改原始元素
-                const clonedSvg = svgElement.cloneNode(true) as SVGSVGElement;
+                const clonedNode = svgElement.cloneNode(true);
+                if (!(clonedNode instanceof SVGSVGElement)) {
+                    reject(new Error('SVG克隆失败'));
+                    return;
+                }
+                const clonedSvg = clonedNode;
                 
                 // 确保SVG有正确的命名空间和属性
                 clonedSvg.setAttribute('xmlns', 'http://www.w3.org/2000/svg');

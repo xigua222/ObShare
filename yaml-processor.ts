@@ -130,7 +130,7 @@ export class YamlProcessor {
                 originalText,
                 startIndex,
                 endIndex
-            } as YamlInfo;
+            };
         } catch (error) {
             this.logError('[YAML处理器] YAML 解析错误:', error);
             return null;
@@ -383,13 +383,13 @@ export class YamlProcessor {
                     const starString = '⭐'.repeat(Math.floor(value));
                     return `${starString} (${value}/5)`;
                 }
-                return String(value);
+                return this.stringifyValue(value);
                 
             case 'tags':
                 if (Array.isArray(value)) {
                     return value.join(', ');
                 }
-                return String(value);
+                return this.stringifyValue(value);
                 
             case 'date':
             case 'created':
@@ -401,17 +401,24 @@ export class YamlProcessor {
                         return date.toLocaleDateString('zh-CN');
                     }
                 }
-                return String(value);
+                return this.stringifyValue(value);
                 
             default:
                 if (Array.isArray(value)) {
                     return value.join(', ');
-                } else if (typeof value === 'object') {
-                    return JSON.stringify(value);
-                } else {
-                    return String(value);
                 }
+                return this.stringifyValue(value);
         }
+    }
+
+    private stringifyValue(value: YamlValue): string {
+        if (value === undefined || value === null) {
+            return '';
+        }
+        if (typeof value === 'object') {
+            return JSON.stringify(value);
+        }
+        return String(value);
     }
 
     /**

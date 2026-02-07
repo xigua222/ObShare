@@ -195,7 +195,7 @@ export default class FeishuUploaderPlugin extends Plugin {
 
 		// 添加ribbon按钮
 		this.addRibbonIcon('share', '分享当前页面', (evt: MouseEvent) => {
-			this.uploadCurrentDocument();
+		void this.uploadCurrentDocument();
 		});
 
 		// 添加设置选项卡
@@ -209,7 +209,7 @@ export default class FeishuUploaderPlugin extends Plugin {
 		if (this.settings.appId && this.settings.appSecret) {
 			// 创建异步回调包装函数
 			const asyncCallback = () => {
-				this.incrementApiCallCount().catch(error => {
+				void this.incrementApiCallCount().catch(error => {
 					const errorMessage = error instanceof Error ? error.message : String(error);
 					console.error(`[飞书插件] API调用计数更新失败: ${errorMessage}`);
 					if (this.settings.debugLoggingEnabled) {
@@ -1285,12 +1285,12 @@ class DocumentPermissionModal extends Modal {
 				
 				if (!this.isFromSettings) {
 				// 从上传流程调用时更新历史记录中的权限设置
-				this.plugin.updateHistoryPermissions(this.docToken, permissionsToSave);
+					await this.plugin.updateHistoryPermissions(this.docToken, permissionsToSave);
 				
 				new UploadResultModal(this.app, this.docUrl, this.title).open();
 			} else {
 				// 从设置页面调用时更新历史记录中的权限设置
-				this.plugin.updateHistoryPermissions(this.docToken, permissionsToSave);
+					await this.plugin.updateHistoryPermissions(this.docToken, permissionsToSave);
 				this.plugin.notificationManager.showNotice('文档权限设置成功', 3000);
 			}
 				
@@ -1359,7 +1359,7 @@ class DocumentPermissionModal extends Modal {
 					await this.plugin.feishuClient!.setDocumentPermissions(refDoc.docToken, permissions, userId);
 					
 					// 更新引用文档的历史记录权限
-					this.plugin.updateHistoryPermissions(refDoc.docToken, {
+					await this.plugin.updateHistoryPermissions(refDoc.docToken, {
 						isPublic: permissions.isPublic,
 						allowCopy: permissions.allowCopy,
 						allowCreateCopy: permissions.allowCreateCopy
@@ -1603,7 +1603,7 @@ class FeishuUploaderSettingTab extends PluginSettingTab {
 
 		// 说明文档
 		const descEl = containerEl.createDiv();
-		descEl.createEl('p', { text: '你需要配置飞书应用App ID、App secret、您的飞书用户ID、您的文件夹token才能正常启动此插件' });
+		descEl.createEl('p', { text: '你需要配置飞书应用 App ID、App secret、您的飞书用户 ID、您的文件夹 token 才能正常启动此插件' });
 		const docLinkP = descEl.createEl('p');
 		docLinkP.createSpan({ text: '完成配置预计需要5-10分钟，请参阅：' });
 		const docLink = docLinkP.createEl('a', { 
@@ -1629,17 +1629,17 @@ class FeishuUploaderSettingTab extends PluginSettingTab {
 
 		// App Secret设置
 		const appSecretSetting = new Setting(containerEl)
-			.setName('App Secret')
-			.setDesc('飞书应用的App Secret')
+			.setName('App secret')
+			.setDesc('飞书应用的 App secret')
 			.addText(text => text
-				.setPlaceholder('输入App Secret')
+				.setPlaceholder('输入 App secret')
 				.setValue(this.plugin.settings.appSecret)
 				.onChange((value) => {
 					this.plugin.settings.appSecret = value;
 					void this.plugin.saveSettings();
 				}));
 		appSecretSetting.nameEl.empty();
-		appSecretSetting.nameEl.createSpan({ text: 'App Secret ' });
+		appSecretSetting.nameEl.createSpan({ text: 'App secret ' });
 		appSecretSetting.nameEl.createSpan({ text: '*', cls: 'obshare-required-field' });
 
 		// 用户ID设置
@@ -1705,7 +1705,7 @@ class FeishuUploaderSettingTab extends PluginSettingTab {
 				.onClick(() => {
 					void (async () => {
 						if (!this.plugin.feishuClient) {
-							this.plugin.notificationManager.showNotice('请先配置App ID和App Secret', 4000, 'missing-config');
+							this.plugin.notificationManager.showNotice('请先配置 App ID 和 App secret', 4000, 'missing-config');
 							return;
 						}
 						
@@ -1741,8 +1741,10 @@ class FeishuUploaderSettingTab extends PluginSettingTab {
 				.setButtonText('重置计数')
 				.setWarning()
 				.onClick(() => {
-					this.plugin.resetUploadCount();
-					this.display(); // 刷新设置页面
+				void (async () => {
+					await this.plugin.resetUploadCount();
+					this.display();
+				})();
 				}));
 
 		// 显示本月API调用次数
@@ -1756,8 +1758,10 @@ class FeishuUploaderSettingTab extends PluginSettingTab {
 				.setButtonText('重置计数')
 				.setWarning()
 				.onClick(() => {
-					this.plugin.resetApiCallCount();
-					this.display(); // 刷新设置页面
+				void (async () => {
+					await this.plugin.resetApiCallCount();
+					this.display();
+				})();
 				}));
 
 		// 发布管理
@@ -1774,8 +1778,10 @@ class FeishuUploaderSettingTab extends PluginSettingTab {
 					.setButtonText('清空')
 					.setWarning()
 					.onClick(() => {
-						this.plugin.clearUploadHistory();
-						this.display(); // 刷新设置页面
+						void (async () => {
+							await this.plugin.clearUploadHistory();
+							this.display();
+						})();
 					}));
 			
 			// 按页面聚合上传记录
@@ -1827,7 +1833,7 @@ class FeishuUploaderSettingTab extends PluginSettingTab {
 					// 为最新上传添加NEW标签
 					if (index === 0) {
 						const newTagEl = timeContainer.createEl('span', {
-							text: 'NEW',
+							text: 'New',
 							cls: 'obshare-upload-new-tag'
 						});
 					}
@@ -2038,7 +2044,7 @@ class CalloutConversionModal extends Modal {
 		selectAllBtn.addEventListener('click', () => {
 			this.callouts.forEach((_, index) => {
 				this.selectedCallouts.add(index);
-				const checkbox = contentEl.querySelector(`#callout-${index}`) as HTMLInputElement;
+				const checkbox = contentEl.querySelector<HTMLInputElement>(`#callout-${index}`);
 				if (checkbox) checkbox.checked = true;
 			});
 		});
@@ -2049,7 +2055,7 @@ class CalloutConversionModal extends Modal {
 		deselectAllBtn.addEventListener('click', () => {
 			this.selectedCallouts.clear();
 			this.callouts.forEach((_, index) => {
-				const checkbox = contentEl.querySelector(`#callout-${index}`) as HTMLInputElement;
+				const checkbox = contentEl.querySelector<HTMLInputElement>(`#callout-${index}`);
 				if (checkbox) checkbox.checked = false;
 			});
 		});
@@ -2352,16 +2358,16 @@ class UserAgreementModal extends Modal {
 			text: '同意并继续',
 			cls: 'mod-cta'
 		});
-		agreeButton.onclick = async () => {
-			// 保存用户同意状态
-			this.plugin.settings.agreedToTerms = true;
-			await this.plugin.saveSettings();
-			
-			// 完成插件初始化
-			this.plugin.completeInitialization();
-			
-			this.close();
-			new Notice('欢迎使用 ObShare！', 3000);
+		agreeButton.onclick = () => {
+			void (async () => {
+				this.plugin.settings.agreedToTerms = true;
+				await this.plugin.saveSettings();
+				
+				this.plugin.completeInitialization();
+				
+				this.close();
+				new Notice('欢迎使用 ObShare！', 3000);
+			})();
 		};
 	}
 

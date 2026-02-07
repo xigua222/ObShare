@@ -71,6 +71,8 @@ export interface ImageInfo {
     fileName: string;
     position: number;
     blockId?: string;
+    width?: number;
+    height?: number;
     svgConvertOptions?: {
         originalWidth: number;
         originalHeight: number;
@@ -149,24 +151,78 @@ const getErrorMeta = (error: unknown): ErrorMeta => {
     if (typeof error !== 'object' || error === null) {
         return {};
     }
-    const meta = error as ErrorMeta;
+    const meta = error;
     const result: ErrorMeta = {};
-    if (meta.status !== undefined) {
-        result.status = meta.status;
+    if ('status' in meta) {
+        const status = meta.status;
+        if (typeof status === 'number') {
+            result.status = status;
+        }
     }
-    if (meta.statusText !== undefined) {
-        result.statusText = meta.statusText;
+    if ('statusText' in meta) {
+        const statusText = meta.statusText;
+        if (typeof statusText === 'string') {
+            result.statusText = statusText;
+        }
     }
-    if (meta.response !== undefined) {
+    if ('response' in meta) {
         result.response = meta.response;
     }
-    if (meta.json !== undefined) {
+    if ('json' in meta) {
         result.json = meta.json;
     }
-    if (meta.headers !== undefined) {
+    if ('headers' in meta) {
         result.headers = meta.headers;
     }
     return result;
+};
+
+const isRecord = (value: unknown): value is Record<string, unknown> => {
+    return typeof value === 'object' && value !== null;
+};
+
+const parseErrorResult = (value: unknown): { code: number; msg: string } | null => {
+    if (!isRecord(value)) {
+        return null;
+    }
+    const code = value['code'];
+    const msg = value['msg'];
+    if (typeof code !== 'number' || typeof msg !== 'string') {
+        return null;
+    }
+    return { code, msg };
+};
+
+const parseTenantAccessTokenResponse = (value: unknown): TenantAccessTokenResponse => {
+    const result: TenantAccessTokenResponse = {};
+    if (!isRecord(value)) {
+        return result;
+    }
+    const tenantAccessToken = value['tenant_access_token'];
+    if (typeof tenantAccessToken === 'string') {
+        result.tenant_access_token = tenantAccessToken;
+    }
+    const expire = value['expire'];
+    if (typeof expire === 'number') {
+        result.expire = expire;
+    }
+    const code = value['code'];
+    if (typeof code === 'number') {
+        result.code = code;
+    }
+    const msg = value['msg'];
+    if (typeof msg === 'string') {
+        result.msg = msg;
+    }
+    return result;
+};
+
+const getAdapterBasePath = (adapter: unknown): string | undefined => {
+    if (!isRecord(adapter)) {
+        return undefined;
+    }
+    const basePath = adapter['basePath'];
+    return typeof basePath === 'string' ? basePath : undefined;
 };
 
 const isImportTaskQueryResponse = (value: unknown): value is ImportTaskQueryResponse => {
@@ -284,7 +340,7 @@ export class FeishuApiClient {
             };
             
             this.deleteRequestQueue.push(wrappedRequest);
-            this.processDeleteQueue().catch(error => {
+            void this.processDeleteQueue().catch(error => {
                 reject(error instanceof Error ? error : new Error(String(error)));
             });
         });
@@ -340,7 +396,7 @@ export class FeishuApiClient {
             // 增加API调用计数
             this.apiCallCountCallback?.();
             
-            const result = response.json as TenantAccessTokenResponse;
+            const result = parseTenantAccessTokenResponse(response.json);
             
             // 详细检查响应结构 - 飞书API直接返回tenant_access_token字段
             if (!result.tenant_access_token) {
@@ -684,8 +740,8 @@ export class FeishuApiClient {
                     responseBody: errorMeta.json,
                     headers: errorMeta.headers
                 });
-                if (typeof errorMeta.json === 'object' && errorMeta.json !== null && 'code' in errorMeta.json && 'msg' in errorMeta.json) {
-                    const errorResult = errorMeta.json as { code: number; msg: string };
+                const errorResult = parseErrorResult(errorMeta.json);
+                if (errorResult) {
                     throw new Error(`创建导入任务失败 (错误码: ${errorResult.code}): ${errorResult.msg}`);
                 }
             }
@@ -738,7 +794,7 @@ export class FeishuApiClient {
             // 飞书API返回的数据结构是 data.result，而不是直接的 data
             let taskResult: ImportTaskQueryResponse | undefined;
             if (typeof result.data === 'object' && result.data !== null && 'result' in result.data) {
-                taskResult = (result.data as { result?: ImportTaskQueryResponse }).result;
+                taskResult = result.data.result;
             } else if (isImportTaskQueryResponse(result.data)) {
                 taskResult = result.data;
             }
@@ -921,9 +977,10 @@ export class FeishuApiClient {
         
         if (imageInfo) {
             try {
-                // 对于SVG转换的PNG，使用转换后的实际尺寸
-                if (imageInfo.svgConvertOptions) {
-                    // 对于SVG转换的PNG，使用转换后的实际尺寸
+                if (typeof imageInfo.width === 'number' && imageInfo.width > 0 && typeof imageInfo.height === 'number' && imageInfo.height > 0) {
+                    width = imageInfo.width;
+                    height = imageInfo.height;
+                } else if (imageInfo.svgConvertOptions) {
                     width = imageInfo.svgConvertOptions.originalWidth * imageInfo.svgConvertOptions.scale;
                     height = imageInfo.svgConvertOptions.originalHeight * imageInfo.svgConvertOptions.scale;
                     this.debug(`[DEBUG] SVG转换图片尺寸: originalWidth=${imageInfo.svgConvertOptions.originalWidth}, originalHeight=${imageInfo.svgConvertOptions.originalHeight}, scale=${imageInfo.svgConvertOptions.scale}, finalWidth=${width}, finalHeight=${height}`);
@@ -1072,6 +1129,10 @@ export class FeishuApiClient {
                     if (!fileResult) {
                         throw new Error(`无法读取图片文件: ${imageInfo.path}`);
                     }
+                    if (typeof fileResult.width === 'number' && fileResult.width > 0 && typeof fileResult.height === 'number' && fileResult.height > 0) {
+                        imageInfo.width = fileResult.width;
+                        imageInfo.height = fileResult.height;
+                    }
                     
                     // 如果是SVG文件，保存转换选项到ImageInfo
                     if (fileResult.svgConvertOptions) {
@@ -1186,13 +1247,46 @@ export class FeishuApiClient {
             return null;
         }
     }
+
+    private async getImageDimensionsFromArrayBuffer(arrayBuffer: ArrayBuffer): Promise<{ width: number; height: number } | null> {
+        return new Promise((resolve) => {
+            const blob = new Blob([arrayBuffer]);
+            const url = URL.createObjectURL(blob);
+            const img = new Image();
+
+            img.onload = () => {
+                URL.revokeObjectURL(url);
+                resolve({ width: img.width, height: img.height });
+            };
+
+            img.onerror = () => {
+                URL.revokeObjectURL(url);
+                resolve(null);
+            };
+
+            img.src = url;
+        });
+    }
+
+    private async getPngDimensionsFromBase64(base64: string): Promise<{ width: number; height: number } | null> {
+        return new Promise((resolve) => {
+            const img = new Image();
+            img.onload = () => {
+                resolve({ width: img.width, height: img.height });
+            };
+            img.onerror = () => {
+                resolve(null);
+            };
+            img.src = `data:image/png;base64,${base64}`;
+        });
+    }
     
     /**
      * 读取本地或远程图片文件并转换为base64
      * @param imagePath 图片文件路径或URL
      * @returns base64编码的图片内容和SVG转换选项（如果是SVG）
      */
-    private async readImageFileAsBase64(imagePath: string): Promise<{ base64: string; svgConvertOptions?: { originalWidth: number; originalHeight: number; scale: number } } | null> {
+    private async readImageFileAsBase64(imagePath: string): Promise<{ base64: string; width?: number; height?: number; svgConvertOptions?: { originalWidth: number; originalHeight: number; scale: number } } | null> {
         try {
             // 处理远程图片
             if (imagePath.startsWith('http://') || imagePath.startsWith('https://')) {
@@ -1200,10 +1294,16 @@ export class FeishuApiClient {
                 try {
                     const response = await requestUrl({ url: imagePath });
                     const arrayBuffer = response.arrayBuffer;
+                    const dimensions = await this.getImageDimensionsFromArrayBuffer(arrayBuffer);
                     const uint8Array = new Uint8Array(arrayBuffer);
                     const binaryString = Array.from(uint8Array, byte => String.fromCharCode(byte)).join('');
                     const base64Content = btoa(binaryString);
-                    return { base64: base64Content };
+                    const result: { base64: string; width?: number; height?: number } = { base64: base64Content };
+                    if (dimensions) {
+                        result.width = dimensions.width;
+                        result.height = dimensions.height;
+                    }
+                    return result;
                 } catch (error) {
                     console.error('[飞书API] 下载远程图片失败:', imagePath, error);
                     return null;
@@ -1216,7 +1316,7 @@ export class FeishuApiClient {
                 const cachedData = FeishuApiClient.getMermaidImageFromCache(fileName);
                 if (cachedData) {
                     this.debug('[飞书API] 使用Mermaid缓存图片:', fileName);
-                    const result: { base64: string; svgConvertOptions?: { originalWidth: number; originalHeight: number; scale: number } } = { 
+                    const result: { base64: string; width?: number; height?: number; svgConvertOptions?: { originalWidth: number; originalHeight: number; scale: number } } = { 
                         base64: cachedData.base64Data
                     };
                     if (cachedData.svgConvertOptions) {
@@ -1285,8 +1385,8 @@ export class FeishuApiClient {
                     
                     // 转换SVG为PNG的base64
                     const pngBase64 = await SvgConverter.convertSvgToPng(svgContent, options);
-                    
-                    return {
+                    const dimensions = await this.getPngDimensionsFromBase64(pngBase64);
+                    const result: { base64: string; width?: number; height?: number; svgConvertOptions?: { originalWidth: number; originalHeight: number; scale: number } } = {
                         base64: pngBase64,
                         svgConvertOptions: {
                             originalWidth: options.width || 800,
@@ -1294,6 +1394,11 @@ export class FeishuApiClient {
                             scale: options.scale || 4
                         }
                     };
+                    if (dimensions) {
+                        result.width = dimensions.width;
+                        result.height = dimensions.height;
+                    }
+                    return result;
                 } catch (error) {
                     this.logError('[飞书API] SVG转PNG失败:', error, {
                         path: file.path
@@ -1304,13 +1409,18 @@ export class FeishuApiClient {
                 // 处理其他格式的图片文件
                 // 读取文件内容为ArrayBuffer
                 const arrayBuffer = await app.vault.readBinary(file);
+                const dimensions = await this.getImageDimensionsFromArrayBuffer(arrayBuffer);
                 
                 // 转换为base64
                 const uint8Array = new Uint8Array(arrayBuffer);
                 const binaryString = Array.from(uint8Array, byte => String.fromCharCode(byte)).join('');
                 const base64Content = btoa(binaryString);
-                
-                return { base64: base64Content };
+                const result: { base64: string; width?: number; height?: number } = { base64: base64Content };
+                if (dimensions) {
+                    result.width = dimensions.width;
+                    result.height = dimensions.height;
+                }
+                return result;
             }
             
         } catch (error) {
@@ -1552,8 +1662,8 @@ export class FeishuApiClient {
             if (preProcessedImageInfos && preProcessedImageInfos.length > 0) {
                 imageInfos = preProcessedImageInfos;
             } else {
-                const adapter = this.app?.vault?.adapter as AdapterWithBasePath | undefined;
-                const basePath = adapter?.basePath;
+                const adapter = this.app?.vault?.adapter;
+                const basePath = getAdapterBasePath(adapter);
                 imageInfos = FeishuApiClient.extractImageInfoFromMarkdown(markdownContent, basePath);
             }
             
@@ -1646,8 +1756,8 @@ export class FeishuApiClient {
             const result = await this.waitForImportTask(ticket, onProgress);
             
             // 检查是否有图片需要处理
-            const adapter = this.app?.vault?.adapter as AdapterWithBasePath | undefined;
-            const basePath = adapter?.basePath;
+            const adapter = this.app?.vault?.adapter;
+            const basePath = getAdapterBasePath(adapter);
             const imageInfos = FeishuApiClient.extractImageInfoFromMarkdown(markdownContent, basePath);
             if (imageInfos.length > 0) {
                 onProgress?.('正在处理文档中的图片...');
