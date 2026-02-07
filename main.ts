@@ -1607,7 +1607,7 @@ class FeishuUploaderSettingTab extends PluginSettingTab {
 		const docLinkP = descEl.createEl('p');
 		docLinkP.createSpan({ text: '完成配置预计需要5-10分钟，请参阅：' });
 		const docLink = docLinkP.createEl('a', { 
-			text: '快速配置您的ObShare',
+			text: '快速配置您的 Obshare',
 			href: 'https://itlueqqx8t.feishu.cn/docx/XUJmdxbf7octOFx3Vt0c3KJ3nWe'
 		});
 		docLink.setAttribute('target', '_blank');
@@ -1988,7 +1988,7 @@ class CalloutConversionModal extends Modal {
 		const { contentEl } = this;
 		contentEl.empty();
 
-		new Setting(contentEl).setName('callout 转换确认').setHeading();
+		new Setting(contentEl).setName('Callout 转换确认').setHeading();
 		contentEl.createEl('p', { 
 			text: `发现 ${this.callouts.length} 个 callout 块，请选择要转换为飞书高亮块的项目：` 
 		});
@@ -2282,7 +2282,7 @@ class UserAgreementModal extends Modal {
 		contentEl.addClass('obshare-user-agreement-modal');
 
 		// 标题
-		new Setting(contentEl).setName('ObShare 用户协议').setHeading();
+		new Setting(contentEl).setName('Obshare 用户协议').setHeading();
 
 		// 协议内容容器（可滚动）
 		const agreementContainer = contentEl.createDiv({ cls: 'obshare-agreement-content' });
@@ -2366,7 +2366,7 @@ class UserAgreementModal extends Modal {
 				this.plugin.completeInitialization();
 				
 				this.close();
-				new Notice('欢迎使用 ObShare！', 3000);
+				new Notice('欢迎使用 Obshare！', 3000);
 			})();
 		};
 	}

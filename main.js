@@ -5098,7 +5098,7 @@ var FeishuUploaderSettingTab = class extends import_obsidian4.PluginSettingTab {
     const docLinkP = descEl.createEl("p");
     docLinkP.createSpan({ text: "\u5B8C\u6210\u914D\u7F6E\u9884\u8BA1\u9700\u89815-10\u5206\u949F\uFF0C\u8BF7\u53C2\u9605\uFF1A" });
     const docLink = docLinkP.createEl("a", {
-      text: "\u5FEB\u901F\u914D\u7F6E\u60A8\u7684ObShare",
+      text: "\u5FEB\u901F\u914D\u7F6E\u60A8\u7684 Obshare",
       href: "https://itlueqqx8t.feishu.cn/docx/XUJmdxbf7octOFx3Vt0c3KJ3nWe"
     });
     docLink.setAttribute("target", "_blank");
@@ -5469,7 +5469,7 @@ var UserAgreementModal = class extends import_obsidian4.Modal {
     const { contentEl } = this;
     contentEl.empty();
     contentEl.addClass("obshare-user-agreement-modal");
-    new import_obsidian4.Setting(contentEl).setName("ObShare \u7528\u6237\u534F\u8BAE").setHeading();
+    new import_obsidian4.Setting(contentEl).setName("Obshare \u7528\u6237\u534F\u8BAE").setHeading();
     const agreementContainer = contentEl.createDiv({ cls: "obshare-agreement-content" });
     const agreementText = `\u6B22\u8FCE\u4F7F\u7528ObShare\uFF08\u4EE5\u4E0B\u7B80\u79F0"\u672C\u63D2\u4EF6"\uFF09\u3002\u5728\u4F7F\u7528\u672C\u63D2\u4EF6\u4E4B\u524D\uFF0C\u8BF7\u60A8\u4ED4\u7EC6\u9605\u8BFB\u5E76\u7406\u89E3\u4EE5\u4E0B\u6761\u6B3E\u3002\u4F7F\u7528\u672C\u63D2\u4EF6\u5373\u89C6\u4E3A\u60A8\u5DF2\u540C\u610F\u5E76\u9075\u5B88\u672C\u534F\u8BAE\u3002
 
@@ -5539,7 +5539,7 @@ var UserAgreementModal = class extends import_obsidian4.Modal {
         await this.plugin.saveSettings();
         this.plugin.completeInitialization();
         this.close();
-        new import_obsidian4.Notice("\u6B22\u8FCE\u4F7F\u7528 ObShare\uFF01", 3e3);
+        new import_obsidian4.Notice("\u6B22\u8FCE\u4F7F\u7528 Obshare\uFF01", 3e3);
       })();
     };
   }
