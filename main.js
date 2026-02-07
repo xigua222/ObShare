@@ -438,7 +438,7 @@ var _FeishuApiClient = class {
       }
       this.accessToken = result.tenant_access_token;
       this.tokenExpireTime = now + (result.expire || 0) * 1e3;
-      return this.accessToken;
+      return result.tenant_access_token;
     } catch (error) {
       this.logError("[\u98DE\u4E66API] \u83B7\u53D6\u8BBF\u95EE\u4EE4\u724C\u5931\u8D25:", error);
       if (error instanceof TypeError && error.message.includes("Failed to fetch")) {
@@ -4263,8 +4263,8 @@ var FeishuUploaderPlugin = class extends import_obsidian4.Plugin {
       return;
     }
     if (!this.settings.folderToken) {
-      console.error("[\u98DE\u4E66\u63D2\u4EF6] \u4E0A\u4F20\u5931\u8D25\uFF1A\u6587\u4EF6\u5939Token\u672A\u914D\u7F6E");
-      this.notificationManager.showNotice("\u8BF7\u5148\u5728\u8BBE\u7F6E\u4E2D\u914D\u7F6E\u98DE\u4E66\u6587\u4EF6\u5939Token", 5e3, "missing-folder-token");
+      console.error("[\u98DE\u4E66\u63D2\u4EF6] \u4E0A\u4F20\u5931\u8D25\uFF1A\u6587\u4EF6\u5939 token \u672A\u914D\u7F6E");
+      this.notificationManager.showNotice("\u8BF7\u5148\u5728\u8BBE\u7F6E\u4E2D\u914D\u7F6E\u98DE\u4E66\u6587\u4EF6\u5939 token", 5e3, "missing-folder-token");
       return;
     }
     let content = await this.app.vault.read(file);
@@ -4428,9 +4428,9 @@ var FeishuUploaderPlugin = class extends import_obsidian4.Plugin {
       } else if (errorMessage.includes("\u7F51\u7EDC\u8FDE\u63A5\u5931\u8D25")) {
         userMessage = "\u7F51\u7EDC\u8FDE\u63A5\u5931\u8D25\uFF0C\u8BF7\u68C0\u67E5\u4EE5\u4E0B\u9879\u76EE\uFF1A\n1. \u786E\u4FDD\u7F51\u7EDC\u8FDE\u63A5\u6B63\u5E38\n2. \u68C0\u67E5\u9632\u706B\u5899\u8BBE\u7F6E\n3. \u5C1D\u8BD5\u91CD\u65B0\u8FDE\u63A5\u7F51\u7EDC\u540E\u91CD\u8BD5";
       } else if (errorMessage.includes("\u83B7\u53D6\u8BBF\u95EE\u4EE4\u724C\u5931\u8D25")) {
-        userMessage = "API\u8BA4\u8BC1\u5931\u8D25\uFF0C\u8BF7\u68C0\u67E5\uFF1A\n1. App ID \u548C App Secret \u662F\u5426\u6B63\u786E\n2. \u5E94\u7528\u6743\u9650\u662F\u5426\u914D\u7F6E\u6B63\u786E\n3. \u7F51\u7EDC\u662F\u5426\u80FD\u8BBF\u95EE\u98DE\u4E66API";
+        userMessage = "API \u8BA4\u8BC1\u5931\u8D25\uFF0C\u8BF7\u68C0\u67E5\uFF1A\n1. app ID \u548C app secret \u662F\u5426\u6B63\u786E\n2. \u5E94\u7528\u6743\u9650\u662F\u5426\u914D\u7F6E\u6B63\u786E\n3. \u7F51\u7EDC\u662F\u5426\u80FD\u8BBF\u95EE\u98DE\u4E66 API";
       } else if (errorMessage.includes("\u6587\u4EF6\u5939")) {
-        userMessage = "\u6587\u4EF6\u5939\u914D\u7F6E\u9519\u8BEF\uFF0C\u8BF7\u68C0\u67E5\uFF1A\n1. \u6587\u4EF6\u5939Token\u662F\u5426\u6B63\u786E\n2. \u662F\u5426\u6709\u6587\u4EF6\u5939\u5199\u5165\u6743\u9650";
+        userMessage = "\u6587\u4EF6\u5939\u914D\u7F6E\u9519\u8BEF\uFF0C\u8BF7\u68C0\u67E5\uFF1A\n1. \u6587\u4EF6\u5939 token \u662F\u5426\u6B63\u786E\n2. \u662F\u5426\u6709\u6587\u4EF6\u5939\u5199\u5165\u6743\u9650";
       } else if (errorMessage.includes("\u67E5\u8BE2\u5BFC\u5165\u4EFB\u52A1\u5931\u8D25\uFF0C\u5DF2\u91CD\u8BD5")) {
         userMessage = "\u67E5\u8BE2\u5BFC\u5165\u72B6\u6001\u5931\u8D25\uFF0C\u5DF2\u91CD\u8BD52\u6B21\u3002\u6587\u6863\u53EF\u80FD\u5DF2\u6210\u529F\u4E0A\u4F20\uFF0C\u8BF7\u624B\u52A8\u68C0\u67E5\u98DE\u4E66\u4E91\u6587\u6863\u3002";
       } else {
@@ -4846,7 +4846,7 @@ var DocumentPermissionModal = class extends import_obsidian4.Modal {
         submitButton.textContent = "\u8BBE\u7F6E\u4E2D...";
         try {
           if (!this.plugin.settings.userId) {
-            throw new Error("\u8BF7\u5148\u5728\u8BBE\u7F6E\u4E2D\u914D\u7F6E\u60A8\u7684\u98DE\u4E66\u7528\u6237ID");
+            throw new Error("\u8BF7\u5148\u5728\u8BBE\u7F6E\u4E2D\u914D\u7F6E\u60A8\u7684\u98DE\u4E66\u7528\u6237 ID");
           }
           if (this.isFromSettings) {
             await this.plugin.feishuClient.updateDocumentPermissionsOnly(this.docToken, permissions);
@@ -5094,7 +5094,7 @@ var FeishuUploaderSettingTab = class extends import_obsidian4.PluginSettingTab {
       cls: "obshare-encourage-text"
     });
     const descEl = containerEl.createDiv();
-    descEl.createEl("p", { text: "\u4F60\u9700\u8981\u914D\u7F6E\u98DE\u4E66\u5E94\u7528 App ID\u3001App secret\u3001\u60A8\u7684\u98DE\u4E66\u7528\u6237 ID\u3001\u60A8\u7684\u6587\u4EF6\u5939 token \u624D\u80FD\u6B63\u5E38\u542F\u52A8\u6B64\u63D2\u4EF6" });
+    descEl.createEl("p", { text: "\u4F60\u9700\u8981\u914D\u7F6E\u98DE\u4E66\u5E94\u7528 app ID\u3001app secret\u3001\u60A8\u7684\u98DE\u4E66\u7528\u6237 ID\u3001\u60A8\u7684\u6587\u4EF6\u5939 token \u624D\u80FD\u6B63\u5E38\u542F\u52A8\u6B64\u63D2\u4EF6" });
     const docLinkP = descEl.createEl("p");
     docLinkP.createSpan({ text: "\u5B8C\u6210\u914D\u7F6E\u9884\u8BA1\u9700\u89815-10\u5206\u949F\uFF0C\u8BF7\u53C2\u9605\uFF1A" });
     const docLink = docLinkP.createEl("a", {
@@ -5102,33 +5102,33 @@ var FeishuUploaderSettingTab = class extends import_obsidian4.PluginSettingTab {
       href: "https://itlueqqx8t.feishu.cn/docx/XUJmdxbf7octOFx3Vt0c3KJ3nWe"
     });
     docLink.setAttribute("target", "_blank");
-    const appIdSetting = new import_obsidian4.Setting(containerEl).setName("App ID").setDesc("\u98DE\u4E66\u5E94\u7528\u7684App ID").addText((text) => text.setPlaceholder("\u8F93\u5165App ID").setValue(this.plugin.settings.appId).onChange((value) => {
+    const appIdSetting = new import_obsidian4.Setting(containerEl).setName("App ID").setDesc("\u98DE\u4E66\u5E94\u7528\u7684 app ID").addText((text) => text.setPlaceholder("\u8F93\u5165 app ID").setValue(this.plugin.settings.appId).onChange((value) => {
       this.plugin.settings.appId = value;
       void this.plugin.saveSettings();
     }));
     appIdSetting.nameEl.empty();
     appIdSetting.nameEl.createSpan({ text: "App ID " });
     appIdSetting.nameEl.createSpan({ text: "*", cls: "obshare-required-field" });
-    const appSecretSetting = new import_obsidian4.Setting(containerEl).setName("App secret").setDesc("\u98DE\u4E66\u5E94\u7528\u7684 App secret").addText((text) => text.setPlaceholder("\u8F93\u5165 App secret").setValue(this.plugin.settings.appSecret).onChange((value) => {
+    const appSecretSetting = new import_obsidian4.Setting(containerEl).setName("App secret").setDesc("\u98DE\u4E66\u5E94\u7528\u7684 app secret").addText((text) => text.setPlaceholder("\u8F93\u5165 app secret").setValue(this.plugin.settings.appSecret).onChange((value) => {
       this.plugin.settings.appSecret = value;
       void this.plugin.saveSettings();
     }));
     appSecretSetting.nameEl.empty();
     appSecretSetting.nameEl.createSpan({ text: "App secret " });
     appSecretSetting.nameEl.createSpan({ text: "*", cls: "obshare-required-field" });
-    const userIdSetting = new import_obsidian4.Setting(containerEl).setName("\u7528\u6237ID").setDesc("\u60A8\u7684\u98DE\u4E66\u7528\u6237ID").addText((text) => text.setPlaceholder("\u8F93\u5165\u60A8\u7684\u98DE\u4E66\u7528\u6237ID").setValue(this.plugin.settings.userId).onChange((value) => {
+    const userIdSetting = new import_obsidian4.Setting(containerEl).setName("\u7528\u6237 ID").setDesc("\u60A8\u7684\u98DE\u4E66\u7528\u6237 ID").addText((text) => text.setPlaceholder("\u8F93\u5165\u60A8\u7684\u98DE\u4E66\u7528\u6237 ID").setValue(this.plugin.settings.userId).onChange((value) => {
       this.plugin.settings.userId = value;
       void this.plugin.saveSettings();
     }));
     userIdSetting.nameEl.empty();
-    userIdSetting.nameEl.createSpan({ text: "\u7528\u6237ID " });
+    userIdSetting.nameEl.createSpan({ text: "\u7528\u6237 ID " });
     userIdSetting.nameEl.createSpan({ text: "*", cls: "obshare-required-field" });
-    const folderTokenSetting = new import_obsidian4.Setting(containerEl).setName("\u6587\u4EF6\u5939Token").setDesc("\u98DE\u4E66\u4E91\u7A7A\u95F4\u6587\u4EF6\u5939\u7684Token\uFF0C\u6587\u6863\u5C06\u4E0A\u4F20\u5230\u6B64\u6587\u4EF6\u5939").addText((text) => text.setPlaceholder("\u8F93\u5165\u6587\u4EF6\u5939Token").setValue(this.plugin.settings.folderToken).onChange((value) => {
+    const folderTokenSetting = new import_obsidian4.Setting(containerEl).setName("\u6587\u4EF6\u5939 token").setDesc("\u98DE\u4E66\u4E91\u7A7A\u95F4\u6587\u4EF6\u5939\u7684 token\uFF0C\u6587\u6863\u5C06\u4E0A\u4F20\u5230\u6B64\u6587\u4EF6\u5939").addText((text) => text.setPlaceholder("\u8F93\u5165\u6587\u4EF6\u5939 token").setValue(this.plugin.settings.folderToken).onChange((value) => {
       this.plugin.settings.folderToken = value;
       void this.plugin.saveSettings();
     }));
     folderTokenSetting.nameEl.empty();
-    folderTokenSetting.nameEl.createSpan({ text: "\u6587\u4EF6\u5939Token " });
+    folderTokenSetting.nameEl.createSpan({ text: "\u6587\u4EF6\u5939 token " });
     folderTokenSetting.nameEl.createSpan({ text: "*", cls: "obshare-required-field" });
     new import_obsidian4.Setting(containerEl).setName("\u4E0A\u4F20\u8BBE\u7F6E").setHeading();
     new import_obsidian4.Setting(containerEl).setName("\u53CC\u94FE\u6A21\u5F0F").setDesc("\u53CC\u94FE\u6A21\u5F0F\u53EF\u4EE5\u81EA\u52A8\u5E2E\u4F60\u4E0A\u4F20\u6587\u6863\u5185\u6240\u6709[[]]\u5F15\u7528\u7684\u6587\u6863\uFF0C\u81EA\u52A8\u5EFA\u7ACB\u94FE\u63A5\uFF0C\u4F7F\u5F97\u60A8\u7684\u5206\u4EAB\u66F4\u52A0\u4FBF\u6377\u5B8C\u6574\uFF0C\u4F46\u5728\u5F15\u7528\u6587\u6863\u6570\u91CF\u591A\u7684\u60C5\u51B5\u4E0B\uFF0C\u53EF\u80FD\u4F7F\u4E0A\u4F20\u901F\u5EA6\u53D8\u6162\uFF0C\u9700\u8981\u7B49\u5F85\u66F4\u4E45\u3002").addToggle((toggle) => toggle.setValue(this.plugin.settings.enableDoubleLinkMode).onChange((value) => {
@@ -5140,10 +5140,10 @@ var FeishuUploaderSettingTab = class extends import_obsidian4.PluginSettingTab {
       this.plugin.applyDebugLoggingSetting();
       void this.plugin.saveSettings();
     }));
-    new import_obsidian4.Setting(containerEl).setName("\u6D4B\u8BD5\u8FDE\u63A5").setDesc("\u6D4B\u8BD5\u98DE\u4E66API\u8FDE\u63A5\u662F\u5426\u6B63\u5E38").addButton((button) => button.setButtonText("\u6D4B\u8BD5\u8FDE\u63A5").onClick(() => {
+    new import_obsidian4.Setting(containerEl).setName("\u6D4B\u8BD5\u8FDE\u63A5").setDesc("\u6D4B\u8BD5\u98DE\u4E66 API \u8FDE\u63A5\u662F\u5426\u6B63\u5E38").addButton((button) => button.setButtonText("\u6D4B\u8BD5\u8FDE\u63A5").onClick(() => {
       void (async () => {
         if (!this.plugin.feishuClient) {
-          this.plugin.notificationManager.showNotice("\u8BF7\u5148\u914D\u7F6E App ID \u548C App secret", 4e3, "missing-config");
+          this.plugin.notificationManager.showNotice("\u8BF7\u5148\u914D\u7F6E app ID \u548C app secret", 4e3, "missing-config");
           return;
         }
         try {
@@ -5176,7 +5176,7 @@ var FeishuUploaderSettingTab = class extends import_obsidian4.PluginSettingTab {
     const currentMonth = new Date().toISOString().substring(0, 7);
     const isCurrentMonth = this.plugin.settings.lastResetDate === currentMonth;
     const displayCount = isCurrentMonth ? this.plugin.settings.apiCallCount : 0;
-    new import_obsidian4.Setting(containerEl).setName("\u672C\u6708API\u8C03\u7528\u6B21\u6570").setDesc(`\u672C\u6708\u5DF2\u8C03\u7528\u98DE\u4E66API ${displayCount} \u6B21`).addButton((button) => button.setButtonText("\u91CD\u7F6E\u8BA1\u6570").setWarning().onClick(() => {
+    new import_obsidian4.Setting(containerEl).setName("\u672C\u6708 API \u8C03\u7528\u6B21\u6570").setDesc(`\u672C\u6708\u5DF2\u8C03\u7528\u98DE\u4E66 API ${displayCount} \u6B21`).addButton((button) => button.setButtonText("\u91CD\u7F6E\u8BA1\u6570").setWarning().onClick(() => {
       void (async () => {
         await this.plugin.resetApiCallCount();
         this.display();

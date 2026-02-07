@@ -460,8 +460,8 @@ export default class FeishuUploaderPlugin extends Plugin {
 		}
 
 		if (!this.settings.folderToken) {
-			console.error('[飞书插件] 上传失败：文件夹Token未配置');
-			this.notificationManager.showNotice('请先在设置中配置飞书文件夹Token', 5000, 'missing-folder-token');
+			console.error('[飞书插件] 上传失败：文件夹 token 未配置');
+			this.notificationManager.showNotice('请先在设置中配置飞书文件夹 token', 5000, 'missing-folder-token');
 			return;
 		}
 
@@ -700,9 +700,9 @@ export default class FeishuUploaderPlugin extends Plugin {
 			} else if (errorMessage.includes('网络连接失败')) {
 				userMessage = '网络连接失败，请检查以下项目：\n1. 确保网络连接正常\n2. 检查防火墙设置\n3. 尝试重新连接网络后重试';
 			} else if (errorMessage.includes('获取访问令牌失败')) {
-				userMessage = 'API认证失败，请检查：\n1. App ID 和 App Secret 是否正确\n2. 应用权限是否配置正确\n3. 网络是否能访问飞书API';
+				userMessage = 'API 认证失败，请检查：\n1. app ID 和 app secret 是否正确\n2. 应用权限是否配置正确\n3. 网络是否能访问飞书 API';
 			} else if (errorMessage.includes('文件夹')) {
-				userMessage = '文件夹配置错误，请检查：\n1. 文件夹Token是否正确\n2. 是否有文件夹写入权限';
+				userMessage = '文件夹配置错误，请检查：\n1. 文件夹 token 是否正确\n2. 是否有文件夹写入权限';
 			} else if (errorMessage.includes('查询导入任务失败，已重试')) {
 				userMessage = '查询导入状态失败，已重试2次。文档可能已成功上传，请手动检查飞书云文档。';
 			} else {
@@ -1258,7 +1258,7 @@ class DocumentPermissionModal extends Modal {
 			try {
 				// 检查用户ID是否已配置
 				if (!this.plugin.settings.userId) {
-					throw new Error('请先在设置中配置您的飞书用户ID');
+					throw new Error('请先在设置中配置您的飞书用户 ID');
 				}
 				
 				// 根据调用来源选择不同的API方法
@@ -1603,7 +1603,7 @@ class FeishuUploaderSettingTab extends PluginSettingTab {
 
 		// 说明文档
 		const descEl = containerEl.createDiv();
-		descEl.createEl('p', { text: '你需要配置飞书应用 App ID、App secret、您的飞书用户 ID、您的文件夹 token 才能正常启动此插件' });
+		descEl.createEl('p', { text: '你需要配置飞书应用 app ID、app secret、您的飞书用户 ID、您的文件夹 token 才能正常启动此插件' });
 		const docLinkP = descEl.createEl('p');
 		docLinkP.createSpan({ text: '完成配置预计需要5-10分钟，请参阅：' });
 		const docLink = docLinkP.createEl('a', { 
@@ -1615,9 +1615,9 @@ class FeishuUploaderSettingTab extends PluginSettingTab {
 		// App ID设置
 		const appIdSetting = new Setting(containerEl)
 			.setName('App ID')
-			.setDesc('飞书应用的App ID')
+			.setDesc('飞书应用的 app ID')
 			.addText(text => text
-				.setPlaceholder('输入App ID')
+				.setPlaceholder('输入 app ID')
 				.setValue(this.plugin.settings.appId)
 				.onChange((value) => {
 					this.plugin.settings.appId = value;
@@ -1630,9 +1630,9 @@ class FeishuUploaderSettingTab extends PluginSettingTab {
 		// App Secret设置
 		const appSecretSetting = new Setting(containerEl)
 			.setName('App secret')
-			.setDesc('飞书应用的 App secret')
+			.setDesc('飞书应用的 app secret')
 			.addText(text => text
-				.setPlaceholder('输入 App secret')
+				.setPlaceholder('输入 app secret')
 				.setValue(this.plugin.settings.appSecret)
 				.onChange((value) => {
 					this.plugin.settings.appSecret = value;
@@ -1644,32 +1644,32 @@ class FeishuUploaderSettingTab extends PluginSettingTab {
 
 		// 用户ID设置
 		const userIdSetting = new Setting(containerEl)
-			.setName('用户ID')
-			.setDesc('您的飞书用户ID')
+			.setName('用户 ID')
+			.setDesc('您的飞书用户 ID')
 			.addText(text => text
-				.setPlaceholder('输入您的飞书用户ID')
+				.setPlaceholder('输入您的飞书用户 ID')
 				.setValue(this.plugin.settings.userId)
 				.onChange((value) => {
 					this.plugin.settings.userId = value;
 					void this.plugin.saveSettings();
 				}));
 		userIdSetting.nameEl.empty();
-		userIdSetting.nameEl.createSpan({ text: '用户ID ' });
+		userIdSetting.nameEl.createSpan({ text: '用户 ID ' });
 		userIdSetting.nameEl.createSpan({ text: '*', cls: 'obshare-required-field' });
 
 		// 文件夹Token设置
 		const folderTokenSetting = new Setting(containerEl)
-			.setName('文件夹Token')
-			.setDesc('飞书云空间文件夹的Token，文档将上传到此文件夹')
+			.setName('文件夹 token')
+			.setDesc('飞书云空间文件夹的 token，文档将上传到此文件夹')
 			.addText(text => text
-				.setPlaceholder('输入文件夹Token')
+				.setPlaceholder('输入文件夹 token')
 				.setValue(this.plugin.settings.folderToken)
 				.onChange((value) => {
 					this.plugin.settings.folderToken = value;
 					void this.plugin.saveSettings();
 				}));
 		folderTokenSetting.nameEl.empty();
-		folderTokenSetting.nameEl.createSpan({ text: '文件夹Token ' });
+		folderTokenSetting.nameEl.createSpan({ text: '文件夹 token ' });
 		folderTokenSetting.nameEl.createSpan({ text: '*', cls: 'obshare-required-field' });
 
 		// 双链模式设置
@@ -1699,13 +1699,13 @@ class FeishuUploaderSettingTab extends PluginSettingTab {
 		// 测试连接按钮
 		new Setting(containerEl)
 			.setName('测试连接')
-			.setDesc('测试飞书API连接是否正常')
+			.setDesc('测试飞书 API 连接是否正常')
 			.addButton(button => button
 				.setButtonText('测试连接')
 				.onClick(() => {
 					void (async () => {
 						if (!this.plugin.feishuClient) {
-							this.plugin.notificationManager.showNotice('请先配置 App ID 和 App secret', 4000, 'missing-config');
+							this.plugin.notificationManager.showNotice('请先配置 app ID 和 app secret', 4000, 'missing-config');
 							return;
 						}
 						
@@ -1752,8 +1752,8 @@ class FeishuUploaderSettingTab extends PluginSettingTab {
 		const isCurrentMonth = this.plugin.settings.lastResetDate === currentMonth;
 		const displayCount = isCurrentMonth ? this.plugin.settings.apiCallCount : 0;
 		new Setting(containerEl)
-			.setName('本月API调用次数')
-			.setDesc(`本月已调用飞书API ${displayCount} 次`)
+			.setName('本月 API 调用次数')
+			.setDesc(`本月已调用飞书 API ${displayCount} 次`)
 			.addButton(button => button
 				.setButtonText('重置计数')
 				.setWarning()

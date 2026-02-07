@@ -413,7 +413,7 @@ export class FeishuApiClient {
             // 设置过期时间（使用完整的有效期，通过30分钟提前刷新策略管理）
             this.tokenExpireTime = now + (result.expire || 0) * 1000;
             
-            return this.accessToken!; // 使用非空断言，因为我们已经验证了token存在
+            return result.tenant_access_token;
         } catch (error) {
             this.logError('[飞书API] 获取访问令牌失败:', error);
             
