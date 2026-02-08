@@ -99,7 +99,6 @@ export class LinkProcessor {
             if (!match[1]) continue; // 跳过无效匹配
             
             const title = match[1].trim(); // 文档标题
-            const displayText = match[2] || title; // 显示文本，如果没有指定则使用标题
             const originalText = match[0]; // 完整的双链语法
             const position = match.index; // 在内容中的位置
             

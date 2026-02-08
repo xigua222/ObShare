@@ -135,10 +135,6 @@ type BlockUpdateRequest = {
 
 type DocumentBlockPayload = Record<string, unknown>;
 
-type AdapterWithBasePath = {
-    basePath?: string;
-};
-
 type ErrorMeta = {
     status?: number;
     statusText?: string;
@@ -1029,6 +1025,7 @@ export class FeishuApiClient {
                     this.debug(`[DEBUG] 无需缩放: maxWidth=${maxWidth}, maxHeight=${maxHeight}`);
                 }
             } catch (error) {
+                void error;
                 // 获取图片尺寸失败，使用默认尺寸
             }
         }
@@ -1494,7 +1491,6 @@ export class FeishuApiClient {
         
         let convertedContent = markdownContent;
         let match;
-        let convertCount = 0;
         
         // 重置正则表达式的lastIndex
         obsidianImageRegex.lastIndex = 0;
@@ -1512,7 +1508,6 @@ export class FeishuApiClient {
             
             // 替换内容
             convertedContent = convertedContent.replace(obsidianSyntax, standardSyntax);
-            convertCount++;
             
         }
         
@@ -1538,9 +1533,7 @@ export class FeishuApiClient {
         
         // 处理标准Markdown格式的图片（现在包括转换后的Obsidian图片）
         while ((match = markdownImageRegex.exec(convertedContent)) !== null) {
-            const alt = match[1];
             const path = match[2];
-            const title = match[3];
             
             if (!path) continue;
             

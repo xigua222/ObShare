@@ -203,6 +203,7 @@ export class MermaidConverter {
                         svgWidth = bbox.width || svgElement.clientWidth || 800;
                         svgHeight = bbox.height || svgElement.clientHeight || 600;
                     } catch (e) {
+                        void e;
                         svgWidth = svgElement.clientWidth || 800;
                         svgHeight = svgElement.clientHeight || 600;
                     }
@@ -301,6 +302,7 @@ export class MermaidConverter {
                             svgWidth = bbox.width + (bbox.x || 0);
                             svgHeight = bbox.height + (bbox.y || 0);
                         } catch (e) {
+                            void e;
                             // 方法4：使用默认尺寸
                             svgWidth = svgElement.clientWidth || 800;
                             svgHeight = svgElement.clientHeight || 600;

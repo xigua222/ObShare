@@ -1320,7 +1320,6 @@ var _FeishuApiClient = class {
     const obsidianImageRegex = /!\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g;
     let convertedContent = markdownContent;
     let match;
-    let convertCount = 0;
     obsidianImageRegex.lastIndex = 0;
     while ((match = obsidianImageRegex.exec(markdownContent)) !== null) {
       const fileName = match[1];
@@ -1331,7 +1330,6 @@ var _FeishuApiClient = class {
       const encodedFileName = encodeURI(fileName);
       const standardSyntax = `![${altText}](${encodedFileName})`;
       convertedContent = convertedContent.replace(obsidianSyntax, standardSyntax);
-      convertCount++;
     }
     return convertedContent;
   }
@@ -1347,9 +1345,7 @@ var _FeishuApiClient = class {
     let match;
     let position = 0;
     while ((match = markdownImageRegex.exec(convertedContent)) !== null) {
-      const alt = match[1];
       const path = match[2];
-      const title = match[3];
       if (!path)
         continue;
       const decodedPath = decodeURI(path);
@@ -3432,7 +3428,6 @@ var _LinkProcessor = class {
       if (!match[1])
         continue;
       const title = match[1].trim();
-      const displayText = match[2] || title;
       const originalText = match[0];
       const position = match.index;
       const file = this.findFileByTitle(title);
@@ -5089,7 +5084,7 @@ var FeishuUploaderSettingTab = class extends import_obsidian4.PluginSettingTab {
     svg.appendChild(pathInner);
     iconSpan.appendChild(svg);
     githubLink.createSpan({ text: "Star on GitHub" });
-    const encourageText = headerContainer.createEl("div", {
+    headerContainer.createEl("div", {
       text: "\u63D2\u4EF6\u5B8C\u5168\u514D\u8D39\u5F00\u6E90\uFF0C\u5982\u679C\u60A8\u559C\u6B22\u8FD9\u4E2A\u63D2\u4EF6\uFF0C\u6073\u8BF7\u5E2E\u5FD9\u70B9\u4E2A star\uFF0C\u8FD9\u4F1A\u662F\u5BF9\u4F5C\u8005\u6781\u5927\u7684\u9F13\u52B1~",
       cls: "obshare-encourage-text"
     });
@@ -5098,7 +5093,7 @@ var FeishuUploaderSettingTab = class extends import_obsidian4.PluginSettingTab {
     const docLinkP = descEl.createEl("p");
     docLinkP.createSpan({ text: "\u5B8C\u6210\u914D\u7F6E\u9884\u8BA1\u9700\u89815-10\u5206\u949F\uFF0C\u8BF7\u53C2\u9605\uFF1A" });
     const docLink = docLinkP.createEl("a", {
-      text: "\u5FEB\u901F\u914D\u7F6E\u60A8\u7684 Obshare",
+      text: "\u5FEB\u901F\u914D\u7F6E\u60A8\u7684 obshare",
       href: "https://itlueqqx8t.feishu.cn/docx/XUJmdxbf7octOFx3Vt0c3KJ3nWe"
     });
     docLink.setAttribute("target", "_blank");
@@ -5198,11 +5193,11 @@ var FeishuUploaderSettingTab = class extends import_obsidian4.PluginSettingTab {
         const pageGroupContainer = historyContainer.createDiv("obshare-page-group-container");
         const pageGroupHeader = pageGroupContainer.createDiv("obshare-page-group-header");
         const groupTitleText = pageGroup.isReferencedDocument ? `\u{1F517} ${pageTitle}` : pageTitle;
-        const groupTitleEl = pageGroupHeader.createEl("div", {
+        pageGroupHeader.createEl("div", {
           text: groupTitleText,
           cls: "obshare-page-group-title"
         });
-        const uploadCountEl = pageGroupHeader.createEl("div", {
+        pageGroupHeader.createEl("div", {
           text: `${pageGroup.uploads.length} \u6B21\u4E0A\u4F20`,
           cls: "obshare-page-group-count"
         });
@@ -5214,12 +5209,12 @@ var FeishuUploaderSettingTab = class extends import_obsidian4.PluginSettingTab {
           }
           const headerEl = historyItem.createDiv("obshare-upload-history-header");
           const timeContainer = headerEl.createDiv("obshare-upload-time-container");
-          const timeEl = timeContainer.createEl("div", {
+          timeContainer.createEl("div", {
             text: item.uploadTime,
             cls: "obshare-upload-history-time"
           });
           if (index === 0) {
-            const newTagEl = timeContainer.createEl("span", {
+            timeContainer.createEl("span", {
               text: "New",
               cls: "obshare-upload-new-tag"
             });
@@ -5471,7 +5466,7 @@ var UserAgreementModal = class extends import_obsidian4.Modal {
     contentEl.addClass("obshare-user-agreement-modal");
     new import_obsidian4.Setting(contentEl).setName("Obshare \u7528\u6237\u534F\u8BAE").setHeading();
     const agreementContainer = contentEl.createDiv({ cls: "obshare-agreement-content" });
-    const agreementText = `\u6B22\u8FCE\u4F7F\u7528ObShare\uFF08\u4EE5\u4E0B\u7B80\u79F0"\u672C\u63D2\u4EF6"\uFF09\u3002\u5728\u4F7F\u7528\u672C\u63D2\u4EF6\u4E4B\u524D\uFF0C\u8BF7\u60A8\u4ED4\u7EC6\u9605\u8BFB\u5E76\u7406\u89E3\u4EE5\u4E0B\u6761\u6B3E\u3002\u4F7F\u7528\u672C\u63D2\u4EF6\u5373\u89C6\u4E3A\u60A8\u5DF2\u540C\u610F\u5E76\u9075\u5B88\u672C\u534F\u8BAE\u3002
+    const agreementText = `\u6B22\u8FCE\u4F7F\u7528 obshare\uFF08\u4EE5\u4E0B\u7B80\u79F0"\u672C\u63D2\u4EF6"\uFF09\u3002\u5728\u4F7F\u7528\u672C\u63D2\u4EF6\u4E4B\u524D\uFF0C\u8BF7\u60A8\u4ED4\u7EC6\u9605\u8BFB\u5E76\u7406\u89E3\u4EE5\u4E0B\u6761\u6B3E\u3002\u4F7F\u7528\u672C\u63D2\u4EF6\u5373\u89C6\u4E3A\u60A8\u5DF2\u540C\u610F\u5E76\u9075\u5B88\u672C\u534F\u8BAE\u3002
 
 \u672C\u63D2\u4EF6\u662F\u4E00\u6B3E\u7528\u4E8E\u5C06\u60A8\u50A8\u5B58\u5728\u672C\u5730Obsidian\u7B14\u8BB0\u901A\u8FC7\u98DE\u4E66\uFF08\u4E0B\u79F0"\u76EE\u6807\u670D\u52A1"\uFF09\u5F00\u653E\u5E73\u53F0 api \u63A5\u53E3\u4E0A\u4F20\u5230\u60A8\u7684\u98DE\u4E66\u8D26\u53F7\u6240\u5C5E\u7684\u4E91\u7A7A\u95F4/\u4E91\u6587\u6863\uFF0C\u4ECE\u800C\u4F7F\u5F97\u60A8\u53EF\u4EE5\u66F4\u52A0\u65B9\u4FBF\u5206\u4EAB\u548C\u7BA1\u7406\u81EA\u5DF1\u7684\u7B14\u8BB0\u3002
 
@@ -5539,7 +5534,7 @@ var UserAgreementModal = class extends import_obsidian4.Modal {
         await this.plugin.saveSettings();
         this.plugin.completeInitialization();
         this.close();
-        new import_obsidian4.Notice("\u6B22\u8FCE\u4F7F\u7528 Obshare\uFF01", 3e3);
+        new import_obsidian4.Notice("\u6B22\u8FCE\u4F7F\u7528 obshare\uFF01", 3e3);
       })();
     };
   }

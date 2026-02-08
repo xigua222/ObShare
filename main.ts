@@ -1,4 +1,4 @@
-import { App, Editor, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting, TFile, MarkdownRenderer, Component } from 'obsidian';
+import { App, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting, TFile, MarkdownRenderer, Component } from 'obsidian';
 import { FeishuApiClient, ImageInfo, createFeishuClient } from './feishu-api';
 import { CryptoUtils } from './crypto-utils';
 import { CalloutConverter, CalloutInfo } from './callout-converter';
@@ -1596,7 +1596,7 @@ class FeishuUploaderSettingTab extends PluginSettingTab {
 		githubLink.createSpan({ text: 'Star on GitHub' });
 
 		// 鼓励文案
-		const encourageText = headerContainer.createEl('div', {
+		headerContainer.createEl('div', {
 			text: '插件完全免费开源，如果您喜欢这个插件，恳请帮忙点个 star，这会是对作者极大的鼓励~',
 			cls: 'obshare-encourage-text'
 		});
@@ -1607,7 +1607,7 @@ class FeishuUploaderSettingTab extends PluginSettingTab {
 		const docLinkP = descEl.createEl('p');
 		docLinkP.createSpan({ text: '完成配置预计需要5-10分钟，请参阅：' });
 		const docLink = docLinkP.createEl('a', { 
-			text: '快速配置您的 Obshare',
+			text: '快速配置您的 obshare',
 			href: 'https://itlueqqx8t.feishu.cn/docx/XUJmdxbf7octOFx3Vt0c3KJ3nWe'
 		});
 		docLink.setAttribute('target', '_blank');
@@ -1798,13 +1798,13 @@ class FeishuUploaderSettingTab extends PluginSettingTab {
 				// 页面组标题
 				const pageGroupHeader = pageGroupContainer.createDiv('obshare-page-group-header');
 				const groupTitleText = pageGroup.isReferencedDocument ? `🔗 ${pageTitle}` : pageTitle;
-				const groupTitleEl = pageGroupHeader.createEl('div', {
+				pageGroupHeader.createEl('div', {
 					text: groupTitleText,
 					cls: 'obshare-page-group-title'
 				});
 				
 				// 显示该页面的上传次数
-				const uploadCountEl = pageGroupHeader.createEl('div', {
+				pageGroupHeader.createEl('div', {
 					text: `${pageGroup.uploads.length} 次上传`,
 					cls: 'obshare-page-group-count'
 				});
@@ -1825,14 +1825,14 @@ class FeishuUploaderSettingTab extends PluginSettingTab {
 					
 					// 上传时间和NEW标签
 					const timeContainer = headerEl.createDiv('obshare-upload-time-container');
-					const timeEl = timeContainer.createEl('div', { 
+					timeContainer.createEl('div', { 
 						text: item.uploadTime, 
 						cls: 'obshare-upload-history-time' 
 					});
 					
 					// 为最新上传添加NEW标签
 					if (index === 0) {
-						const newTagEl = timeContainer.createEl('span', {
+						timeContainer.createEl('span', {
 							text: 'New',
 							cls: 'obshare-upload-new-tag'
 						});
@@ -2020,7 +2020,7 @@ class CalloutConversionModal extends Modal {
 			});
 
 			// 显示 Callout 类型和内容预览
-			const typeSpan = label.createEl('span', {
+			label.createEl('span', {
 				text: `[!${callout.type}]`,
 				cls: 'obshare-callout-type'
 			});
@@ -2089,6 +2089,8 @@ class CalloutConversionModal extends Modal {
 		contentEl.empty();
 	}
 }
+
+void CalloutConversionModal;
 
 class UploadProgressModal extends Modal {
 	private progressBar!: HTMLElement;
@@ -2288,7 +2290,7 @@ class UserAgreementModal extends Modal {
 		const agreementContainer = contentEl.createDiv({ cls: 'obshare-agreement-content' });
 
 		// 协议内容（Markdown格式）
-		const agreementText = `欢迎使用ObShare（以下简称"本插件"）。在使用本插件之前，请您仔细阅读并理解以下条款。使用本插件即视为您已同意并遵守本协议。
+		const agreementText = `欢迎使用 obshare（以下简称"本插件"）。在使用本插件之前，请您仔细阅读并理解以下条款。使用本插件即视为您已同意并遵守本协议。
 
 本插件是一款用于将您储存在本地Obsidian笔记通过飞书（下称"目标服务"）开放平台 api 接口上传到您的飞书账号所属的云空间/云文档，从而使得您可以更加方便分享和管理自己的笔记。
 
@@ -2366,7 +2368,7 @@ class UserAgreementModal extends Modal {
 				this.plugin.completeInitialization();
 				
 				this.close();
-				new Notice('欢迎使用 Obshare！', 3000);
+				new Notice('欢迎使用 obshare！', 3000);
 			})();
 		};
 	}
