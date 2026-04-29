@@ -3960,6 +3960,294 @@ MermaidConverter.RENDER_TIMEOUT = 1e4;
 // 10秒超时
 MermaidConverter.debugEnabled = false;
 
+// highlight-converter.ts
+var _HighlightConverter = class {
+  static setDebugEnabled(enabled) {
+    this.debugEnabled = enabled;
+  }
+  debug(...args) {
+    if (_HighlightConverter.debugEnabled) {
+      console.debug(...args);
+    }
+  }
+  logError(summary, error, details) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    console.error(summary, errorMessage);
+    this.debug(`${summary} \u8BE6\u60C5:`, { ...details, error, errorMessage });
+  }
+  constructor(feishuClient) {
+    this.feishuClient = feishuClient;
+  }
+  /**
+   * CSS 颜色值映射到飞书枚举
+   */
+  static mapCssColorToFeishu(color) {
+    const c = color.trim().toLowerCase();
+    if (this.COLOR_MAP[c] !== void 0)
+      return this.COLOR_MAP[c];
+    if (this.HEX_MAP[c] !== void 0)
+      return this.HEX_MAP[c];
+    return this.DEFAULT_COLOR;
+  }
+  /**
+   * 剥离一行中所有高亮语法，返回纯文本
+   */
+  static stripLine(line) {
+    return line.replace(/<mark\s+style\s*=\s*"[^"]*"\s*>([\s\S]*?)<\/mark>/gi, "$1").replace(/<mark>([\s\S]*?)<\/mark>/gi, "$1").replace(/==((?:(?!==).)+)==/g, "$1");
+  }
+  /**
+   * 从 Markdown 中提取所有高亮信息
+   */
+  extractHighlights(markdown) {
+    const highlights = [];
+    const lines = markdown.split("\n");
+    for (const line of lines) {
+      const lineContext = _HighlightConverter.stripLine(line).trim();
+      if (!lineContext)
+        continue;
+      let match;
+      _HighlightConverter.MARK_STYLE_REGEX.lastIndex = 0;
+      while ((match = _HighlightConverter.MARK_STYLE_REGEX.exec(line)) !== null) {
+        const text = match[2] || "";
+        const colorStr = match[1] || "";
+        highlights.push({
+          text,
+          color: _HighlightConverter.mapCssColorToFeishu(colorStr),
+          lineContext
+        });
+      }
+      _HighlightConverter.MARK_PLAIN_REGEX.lastIndex = 0;
+      while ((match = _HighlightConverter.MARK_PLAIN_REGEX.exec(line)) !== null) {
+        const fullTag = match[0];
+        if (fullTag.includes("style"))
+          continue;
+        highlights.push({
+          text: match[1] || "",
+          color: _HighlightConverter.DEFAULT_COLOR,
+          lineContext
+        });
+      }
+      _HighlightConverter.DOUBLE_EQUAL_REGEX.lastIndex = 0;
+      while ((match = _HighlightConverter.DOUBLE_EQUAL_REGEX.exec(line)) !== null) {
+        highlights.push({
+          text: match[1] || "",
+          color: _HighlightConverter.DEFAULT_COLOR,
+          lineContext
+        });
+      }
+    }
+    this.debug("[\u9AD8\u4EAE\u8F6C\u6362] \u63D0\u53D6\u5230\u9AD8\u4EAE:", highlights.length, "\u4E2A");
+    return highlights;
+  }
+  /**
+   * 剥离所有高亮语法，保留纯文本
+   */
+  stripHighlightSyntax(markdown) {
+    return markdown.replace(_HighlightConverter.MARK_STYLE_REGEX, "$2").replace(_HighlightConverter.MARK_PLAIN_REGEX, "$1").replace(_HighlightConverter.DOUBLE_EQUAL_REGEX, "$1");
+  }
+  /**
+   * 获取块的文本内容 key（不同 block_type 对应不同 JSON key）
+   */
+  static getTextKey(blockType) {
+    if (blockType === 2)
+      return "text";
+    if (blockType >= 3 && blockType <= 11)
+      return `heading${blockType - 2}`;
+    if (blockType === 12)
+      return "bullet";
+    if (blockType === 13)
+      return "ordered";
+    if (blockType === 15)
+      return "quote";
+    if (blockType === 17)
+      return "todo";
+    return null;
+  }
+  /**
+   * 上传后在飞书文档中应用高亮背景色
+   */
+  async applyHighlightsToDocument(docToken, highlights) {
+    if (highlights.length === 0)
+      return;
+    this.debug("[\u9AD8\u4EAE\u8F6C\u6362] \u5F00\u59CB\u5E94\u7528\u9AD8\u4EAE\u5230\u6587\u6863:", docToken);
+    const blocks = await this.feishuClient.getDocumentBlocksDetailed(docToken);
+    if (!blocks || blocks.length === 0) {
+      this.debug("[\u9AD8\u4EAE\u8F6C\u6362] \u65E0\u6CD5\u83B7\u53D6\u6587\u6863\u5757\uFF0C\u8DF3\u8FC7");
+      return;
+    }
+    const remaining = new Set(highlights);
+    for (const block of blocks) {
+      if (remaining.size === 0)
+        break;
+      if (!_HighlightConverter.TEXT_BLOCK_TYPES.has(block.block_type))
+        continue;
+      const blockAny = block;
+      const textKey = _HighlightConverter.getTextKey(block.block_type);
+      const textObj = textKey ? blockAny[textKey] : block.text;
+      if (!(textObj == null ? void 0 : textObj.elements))
+        continue;
+      const fullText = textObj.elements.map((el) => {
+        var _a;
+        return ((_a = el.text_run) == null ? void 0 : _a.content) || "";
+      }).join("");
+      const matchedHighlights = [];
+      for (const h of remaining) {
+        if (fullText.includes(h.text)) {
+          matchedHighlights.push(h);
+        }
+      }
+      if (matchedHighlights.length === 0)
+        continue;
+      const newElements = this.buildHighlightedElements(fullText, matchedHighlights, textObj.elements);
+      if (!newElements)
+        continue;
+      try {
+        await this.feishuClient.batchUpdateDocumentBlocks(docToken, [{
+          block_id: block.block_id,
+          update_text_elements: { elements: newElements }
+        }]);
+        for (const h of matchedHighlights) {
+          remaining.delete(h);
+        }
+        this.debug("[\u9AD8\u4EAE\u8F6C\u6362] \u5DF2\u66F4\u65B0\u5757:", block.block_id);
+      } catch (error) {
+        this.logError("[\u9AD8\u4EAE\u8F6C\u6362] \u66F4\u65B0\u5757\u5931\u8D25:", error, { blockId: block.block_id });
+      }
+    }
+    this.debug(`[\u9AD8\u4EAE\u8F6C\u6362] \u5B8C\u6210\uFF0C\u5269\u4F59\u672A\u5339\u914D: ${remaining.size}`);
+  }
+  /**
+   * 将文本拆分为带高亮样式的 elements 数组
+   * 保留原有 elements 的样式，仅对高亮部分追加 background_color
+   */
+  buildHighlightedElements(fullText, highlights, originalElements) {
+    const spans = [];
+    for (const h of highlights) {
+      let searchFrom = 0;
+      while (true) {
+        const idx = fullText.indexOf(h.text, searchFrom);
+        if (idx === -1)
+          break;
+        spans.push({ start: idx, end: idx + h.text.length, color: h.color });
+        searchFrom = idx + h.text.length;
+        break;
+      }
+    }
+    if (spans.length === 0)
+      return null;
+    spans.sort((a, b) => a.start - b.start);
+    const charStyles = new Array(fullText.length).fill({});
+    let pos = 0;
+    for (const el of originalElements) {
+      if (!el.text_run)
+        continue;
+      const content = el.text_run.content || "";
+      const style = el.text_run.text_element_style || {};
+      for (let i = 0; i < content.length; i++) {
+        if (pos + i < charStyles.length) {
+          charStyles[pos + i] = style;
+        }
+      }
+      pos += content.length;
+    }
+    const newElements = [];
+    let cursor = 0;
+    for (const span of spans) {
+      if (cursor < span.start) {
+        this.addTextRunSegments(newElements, fullText, cursor, span.start, charStyles, null);
+      }
+      this.addTextRunSegments(newElements, fullText, span.start, span.end, charStyles, span.color);
+      cursor = span.end;
+    }
+    if (cursor < fullText.length) {
+      this.addTextRunSegments(newElements, fullText, cursor, fullText.length, charStyles, null);
+    }
+    return newElements.length > 0 ? newElements : null;
+  }
+  /**
+   * 添加一段文本的 text_run，保留原有样式，可选追加 background_color
+   */
+  addTextRunSegments(elements, fullText, start, end, charStyles, highlightColor) {
+    let segStart = start;
+    while (segStart < end) {
+      const baseStyle = charStyles[segStart] || {};
+      let segEnd = segStart + 1;
+      while (segEnd < end) {
+        const nextStyle = charStyles[segEnd] || {};
+        if (JSON.stringify(baseStyle) !== JSON.stringify(nextStyle))
+          break;
+        segEnd++;
+      }
+      const content = fullText.substring(segStart, segEnd);
+      if (content) {
+        const style = { ...baseStyle };
+        if (highlightColor !== null) {
+          style["background_color"] = highlightColor;
+        }
+        elements.push({
+          text_run: {
+            content,
+            text_element_style: style
+          }
+        });
+      }
+      segStart = segEnd;
+    }
+  }
+};
+var HighlightConverter = _HighlightConverter;
+HighlightConverter.debugEnabled = false;
+// CSS 颜色名 → 飞书枚举
+HighlightConverter.COLOR_MAP = {
+  "red": 1,
+  "orange": 2,
+  "yellow": 3,
+  "green": 4,
+  "blue": 5,
+  "purple": 6,
+  "gray": 7,
+  "grey": 7
+};
+// 常见 hex → 飞书枚举
+HighlightConverter.HEX_MAP = {
+  "#ff0000": 1,
+  "#ff4500": 2,
+  "#ffa500": 2,
+  "#ffff00": 3,
+  "#00ff00": 4,
+  "#008000": 4,
+  "#0000ff": 5,
+  "#800080": 6,
+  "#808080": 7
+};
+HighlightConverter.DEFAULT_COLOR = 3;
+// 黄色
+// 正则：<mark style="background-color: COLOR">text</mark>
+HighlightConverter.MARK_STYLE_REGEX = /<mark\s+style\s*=\s*"[^"]*background-color:\s*([^;"]+)[^"]*"\s*>([\s\S]*?)<\/mark>/gi;
+// 正则：<mark>text</mark>（无 style）
+HighlightConverter.MARK_PLAIN_REGEX = /<mark>([\s\S]*?)<\/mark>/gi;
+// 正则：==text==（Obsidian 原生高亮）
+HighlightConverter.DOUBLE_EQUAL_REGEX = /==((?:(?!==).)+)==/g;
+// 含文本的块类型
+HighlightConverter.TEXT_BLOCK_TYPES = /* @__PURE__ */ new Set([
+  2,
+  3,
+  4,
+  5,
+  6,
+  7,
+  8,
+  9,
+  10,
+  11,
+  // text, heading1-9
+  12,
+  13,
+  15,
+  17
+  // bullet, ordered, quote, todo
+]);
+
 // main.ts
 var NotificationManager = class {
   constructor() {
@@ -4027,6 +4315,7 @@ var FeishuUploaderPlugin = class extends import_obsidian4.Plugin {
     CalloutConverter.setDebugEnabled(this.settings.debugLoggingEnabled);
     YamlProcessor.setDebugEnabled(this.settings.debugLoggingEnabled);
     LinkProcessor.setDebugEnabled(this.settings.debugLoggingEnabled);
+    HighlightConverter.setDebugEnabled(this.settings.debugLoggingEnabled);
     CryptoUtils.setDebugEnabled(this.settings.debugLoggingEnabled);
   }
   async onload() {
@@ -4305,6 +4594,14 @@ var FeishuUploaderPlugin = class extends import_obsidian4.Plugin {
         }
       }
       progressModal.updateProgress(30, "\u6B63\u5728\u5206\u6790\u6587\u6863\u4E2D\u7684\u56FE\u7247...");
+      let cachedHighlights = [];
+      if (this.feishuClient) {
+        const highlightConverter = new HighlightConverter(this.feishuClient);
+        cachedHighlights = highlightConverter.extractHighlights(content);
+        if (cachedHighlights.length > 0) {
+          content = highlightConverter.stripHighlightSyntax(content);
+        }
+      }
       const allImageInfos = this.collectAllImageInfos(content);
       const hasImages = allImageInfos.length > 0;
       let processedContent = content;
@@ -4385,6 +4682,10 @@ var FeishuUploaderPlugin = class extends import_obsidian4.Plugin {
         progressModal.updateProgress(processStep, "\u6B63\u5728\u5904\u7406\u6807\u6CE8\u5757...");
         await this.autoConvertCallouts(result.token, cachedCallouts);
         processStep = 90;
+      }
+      if (cachedHighlights.length > 0) {
+        progressModal.updateProgress(processStep, "\u6B63\u5728\u5904\u7406\u9AD8\u4EAE\u6837\u5F0F...");
+        await this.autoApplyHighlights(result.token, cachedHighlights);
       }
       progressModal.updateProgress(95, "\u6B63\u5728\u4FDD\u5B58\u4E0A\u4F20\u8BB0\u5F55...");
       const referencedDocs = this.settings.enableDoubleLinkMode && linkProcessor && linkResult && linkResult.uploadResults.size > 0 ? Array.from(linkResult.uploadResults.values()).map((result2) => ({
@@ -4557,6 +4858,24 @@ var FeishuUploaderPlugin = class extends import_obsidian4.Plugin {
       console.error(`[\u98DE\u4E66\u63D2\u4EF6] Callout \u81EA\u52A8\u8F6C\u6362\u51FA\u9519: ${errorMessage}`);
       if (this.settings.debugLoggingEnabled) {
         console.debug("[\u98DE\u4E66\u63D2\u4EF6] Callout \u81EA\u52A8\u8F6C\u6362\u51FA\u9519\u8BE6\u60C5:", error);
+      }
+    }
+  }
+  /**
+   * 自动应用高亮背景色（无用户交互）
+   */
+  async autoApplyHighlights(docToken, highlights) {
+    try {
+      if (!this.feishuClient || highlights.length === 0)
+        return;
+      const highlightConverter = new HighlightConverter(this.feishuClient);
+      await new Promise((resolve) => setTimeout(resolve, 1e3));
+      await highlightConverter.applyHighlightsToDocument(docToken, highlights);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      console.error(`[\u98DE\u4E66\u63D2\u4EF6] \u9AD8\u4EAE\u5904\u7406\u5931\u8D25: ${errorMessage}`);
+      if (this.settings.debugLoggingEnabled) {
+        console.debug("[\u98DE\u4E66\u63D2\u4EF6] \u9AD8\u4EAE\u5904\u7406\u5931\u8D25\u8BE6\u60C5:", error);
       }
     }
   }
