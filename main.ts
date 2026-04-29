@@ -5,6 +5,7 @@ import { CalloutConverter, CalloutInfo } from './callout-converter';
 import { YamlProcessor, YamlInfo } from './yaml-processor';
 import { LinkProcessor, UploadResult } from './link-processor';
 import { MermaidConverter, MermaidInfo, MermaidConversionResult } from './mermaid-converter';
+import { HighlightConverter, HighlightInfo } from './highlight-converter';
 
 // 通知管理器
 class NotificationManager {
@@ -143,6 +144,7 @@ export default class FeishuUploaderPlugin extends Plugin {
 		CalloutConverter.setDebugEnabled(this.settings.debugLoggingEnabled);
 		YamlProcessor.setDebugEnabled(this.settings.debugLoggingEnabled);
 		LinkProcessor.setDebugEnabled(this.settings.debugLoggingEnabled);
+		HighlightConverter.setDebugEnabled(this.settings.debugLoggingEnabled);
 		CryptoUtils.setDebugEnabled(this.settings.debugLoggingEnabled);
 	}
 
@@ -527,6 +529,17 @@ export default class FeishuUploaderPlugin extends Plugin {
 			
 			// 统一收集所有图片信息（包括Mermaid、普通图片、SVG）
 			progressModal.updateProgress(30, '正在分析文档中的图片...');
+
+			// 检测并缓存高亮信息（必须在剥离之前进行）
+			let cachedHighlights: HighlightInfo[] = [];
+			if (this.feishuClient) {
+				const highlightConverter = new HighlightConverter(this.feishuClient);
+				cachedHighlights = highlightConverter.extractHighlights(content);
+				if (cachedHighlights.length > 0) {
+					content = highlightConverter.stripHighlightSyntax(content);
+				}
+			}
+
 			const allImageInfos = this.collectAllImageInfos(content);
 			const hasImages = allImageInfos.length > 0;
 			
@@ -651,6 +664,12 @@ export default class FeishuUploaderPlugin extends Plugin {
 				processStep = 90;
 			}
 			
+			// 处理高亮背景色
+			if (cachedHighlights.length > 0) {
+				progressModal.updateProgress(processStep, '正在处理高亮样式...');
+				await this.autoApplyHighlights(result.token, cachedHighlights);
+			}
+
 			// 步骤5: 完成上传 (90-100%)
 			progressModal.updateProgress(95, '正在保存上传记录...');
 			
@@ -872,6 +891,25 @@ export default class FeishuUploaderPlugin extends Plugin {
 				console.debug('[飞书插件] Callout 自动转换出错详情:', error);
 			}
 			// 转换失败不影响主流程，继续执行
+		}
+	}
+
+	/**
+	 * 自动应用高亮背景色（无用户交互）
+	 */
+	private async autoApplyHighlights(docToken: string, highlights: HighlightInfo[]): Promise<void> {
+		try {
+			if (!this.feishuClient || highlights.length === 0) return;
+
+			const highlightConverter = new HighlightConverter(this.feishuClient);
+			await new Promise(resolve => setTimeout(resolve, 1000));
+			await highlightConverter.applyHighlightsToDocument(docToken, highlights);
+		} catch (error) {
+			const errorMessage = error instanceof Error ? error.message : String(error);
+			console.error(`[飞书插件] 高亮处理失败: ${errorMessage}`);
+			if (this.settings.debugLoggingEnabled) {
+				console.debug('[飞书插件] 高亮处理失败详情:', error);
+			}
 		}
 	}
 
