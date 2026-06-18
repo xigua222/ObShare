@@ -3421,13 +3421,20 @@ var _LinkProcessor = class {
    * @returns 双链信息数组
    */
   extractWikiLinks(content) {
+    var _a;
     const wikiLinks = [];
-    const wikiLinkRegex = /\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g;
+    const imageExtensions = [".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".svg"];
+    const allLinksRegex = /(!?)\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g;
     let match;
-    while ((match = wikiLinkRegex.exec(content)) !== null) {
-      if (!match[1])
+    while ((match = allLinksRegex.exec(content)) !== null) {
+      const hasExclamation = match[1] === "!";
+      const title = (_a = match[2]) == null ? void 0 : _a.trim();
+      if (!title)
         continue;
-      const title = match[1].trim();
+      const isImage = imageExtensions.some((ext) => title.toLowerCase().endsWith(ext));
+      if (isImage) {
+        continue;
+      }
       const originalText = match[0];
       const position = match.index;
       const file = this.findFileByTitle(title);
@@ -3436,7 +3443,6 @@ var _LinkProcessor = class {
         title,
         position,
         ...file && { file }
-        // 只有当file存在时才添加file属性
       });
     }
     return wikiLinks;

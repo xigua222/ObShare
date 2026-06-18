@@ -90,31 +90,42 @@ export class LinkProcessor {
      */
     extractWikiLinks(content: string): WikiLinkInfo[] {
         const wikiLinks: WikiLinkInfo[] = [];
-        
-        // 匹配Obsidian双链格式: [[文档标题]] 或 [[文档标题|显示文本]]
-        const wikiLinkRegex = /\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g;
-        
+
+        // 图片扩展名列表
+        const imageExtensions = ['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp', '.svg'];
+
+        // 匹配所有 [[...]] 格式（包括 ![[...]]）
+        const allLinksRegex = /(!?)\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g;
+
         let match;
-        while ((match = wikiLinkRegex.exec(content)) !== null) {
-            if (!match[1]) continue; // 跳过无效匹配
-            
-            const title = match[1].trim(); // 文档标题
-            const originalText = match[0]; // 完整的双链语法
-            const position = match.index; // 在内容中的位置
-            
+        while ((match = allLinksRegex.exec(content)) !== null) {
+            const hasExclamation = match[1] === '!'; // 是否有 ! 前缀
+            const title = match[2]?.trim(); // 文档标题或文件名
+            if (!title) continue;
+
+            // 检查是否是图片文件
+            const isImage = imageExtensions.some(ext => title.toLowerCase().endsWith(ext));
+
+            // 跳过图片
+            if (isImage) {
+                continue;
+            }
+
+            // 对于 ![[文档名]]，originalText 需要包含 !，以便后续完整替换
+            const originalText = match[0]; // 完整匹配（包括可能的 !）
+            const position = match.index;
+
             // 查找对应的文件
             const file = this.findFileByTitle(title);
-            
+
             wikiLinks.push({
                 originalText,
                 title,
                 position,
-                ...(file && { file }) // 只有当file存在时才添加file属性
+                ...(file && { file })
             });
-            
-
         }
-        
+
         return wikiLinks;
     }
 
