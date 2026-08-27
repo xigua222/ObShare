@@ -4407,7 +4407,6 @@ var FeishuUploaderPlugin = class extends import_obsidian4.Plugin {
         }
       }
       progressModal.complete();
-      new DocumentPermissionModal(this.app, result.token, result.url, title, this, false).open();
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       console.error(`[\u98DE\u4E66\u63D2\u4EF6] \u4E0A\u4F20\u5931\u8D25: ${errorMessage}`);
