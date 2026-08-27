@@ -679,8 +679,6 @@ export default class FeishuUploaderPlugin extends Plugin {
 			// 步骤6: 完成上传
 			progressModal.complete();
 			
-			new DocumentPermissionModal(this.app, result.token, result.url, title, this, false).open();
-			
 		} catch (error) {
 			const errorMessage = error instanceof Error ? error.message : String(error);
 			console.error(`[飞书插件] 上传失败: ${errorMessage}`);
