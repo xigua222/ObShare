@@ -4183,7 +4183,7 @@ var FeishuUploaderPlugin = class extends import_obsidian4.Plugin {
         }
       });
     }
-    const obsidianImageRegex = /!\[\[([^\]]+)\]\]/g;
+    const obsidianImageRegex = /!\[\[([^\]|]+)(?:\|[^\]]+)?\]\]/g;
     let match;
     while ((match = obsidianImageRegex.exec(content)) !== null) {
       const fileName = match[1];

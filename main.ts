@@ -362,8 +362,8 @@ export default class FeishuUploaderPlugin extends Plugin {
 		}
 
 		// 2. 收集普通图片信息（Obsidian语法和标准Markdown语法）
-		// Obsidian图片语法: ![[image.png]]
-		const obsidianImageRegex = /!\[\[([^\]]+)\]\]/g;
+		// Obsidian图片语法: ![[image.png]] or ![[image.png|width/alias]]
+		const obsidianImageRegex = /!\[\[([^\]|]+)(?:\|[^\]]+)?\]\]/g;
 		let match;
 		
 		while ((match = obsidianImageRegex.exec(content)) !== null) {
