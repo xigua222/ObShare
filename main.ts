@@ -6,6 +6,24 @@ import { YamlProcessor, YamlInfo } from './yaml-processor';
 import { LinkProcessor, UploadResult } from './link-processor';
 import { MermaidConverter, MermaidInfo, MermaidConversionResult } from './mermaid-converter';
 
+/**
+ * 飞书的 Markdown 导入只在松散列表中保留嵌套项，紧凑列表的子项会被并入父项文本。
+ * 在相邻的顶层列表项之间补一个空行，把列表变为松散列表。代码块内容不变。
+ */
+function loosenNestedLists(markdown: string): string {
+	let inFence = false;
+	let prev = '';
+	return markdown.split('\n').map(line => {
+		if (/^\s*(```|~~~)/.test(line)) inFence = !inFence;
+		const needBlank = !inFence
+			&& /^([-*+]|\d+[.)])\s/.test(line)
+			&& prev.trim() !== ''
+			&& /^(\s+|[-*+]\s|\d+[.)]\s)/.test(prev);
+		prev = line;
+		return needBlank ? '\n' + line : line;
+	}).join('\n');
+}
+
 // 通知管理器
 class NotificationManager {
 	private activeNotifications = new Set<string>();
@@ -630,7 +648,7 @@ export default class FeishuUploaderPlugin extends Plugin {
 
 			// 步骤4: 正常上传流程 (55-85%)
 			progressModal.updateProgress(55, '正在上传文档到飞书...');
-			const result = await this.performNormalUpload(file, content, hasImages, orderedImageInfos, progressModal);
+			const result = await this.performNormalUpload(file, loosenNestedLists(content), hasImages, orderedImageInfos, progressModal);
 
 
 			// 步骤4: 处理YAML和Callout (75-90%)
